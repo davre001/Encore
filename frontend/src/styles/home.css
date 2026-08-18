@@ -1,0 +1,530 @@
+/* Dashboard layout for /home. */
+.dash {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+  padding: 1.6rem 2rem 2.5rem;
+}
+
+.dash__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.dash__head h1 {
+  font-size: clamp(1.7rem, 2.6vw, 2.2rem);
+}
+
+/* The rotating greeting now wears the same light sans display face as the rest
+   of the headers — no italic, low weight, so it reads airy rather than heavy.
+   Size still comes from `.dash__head h1` (higher specificity), so only
+   family/style/weight change. */
+.dash__greeting {
+  font-family: var(--font-display);
+  font-style: normal;
+  font-weight: 300;
+  letter-spacing: -0.01em;
+}
+
+.dash__head p {
+  margin-top: 0.4rem;
+  color: var(--mute);
+  font-size: 0.92rem;
+}
+
+.dash__kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.dash__row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.15rem;
+}
+
+.dash__row--wide {
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+}
+
+/* ---- metric cards ---- */
+
+.metric {
+  padding: 1.05rem 1.1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--bg-2);
+}
+
+.metric__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.metric__label {
+  color: var(--mute);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.metric__badge {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 0.65rem;
+  flex-shrink: 0;
+}
+
+.metric__badge svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.metric__badge.is-slate {
+  background: color-mix(in srgb, var(--paper) 12%, transparent);
+  color: var(--paper);
+}
+
+.metric__badge.is-green {
+  background: color-mix(in srgb, #8fd39a 20%, transparent);
+  color: #8fd39a;
+}
+
+.metric__badge.is-violet {
+  background: color-mix(in srgb, var(--chart-2) 26%, transparent);
+  color: color-mix(in srgb, var(--chart-2) 70%, var(--paper));
+}
+
+.metric__badge.is-amber {
+  background: color-mix(in srgb, var(--ember) 20%, transparent);
+  color: var(--ember);
+}
+
+.metric__value {
+  margin-top: 0.5rem;
+  font-family: var(--font-display);
+  font-size: 1.95rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric__meta {
+  margin-top: 0.3rem;
+  color: var(--paper-dim);
+  font-size: 0.8rem;
+}
+
+.metric__meta.is-up {
+  color: #8fd39a;
+}
+
+.metric__meta.is-down {
+  color: #e0a07a;
+}
+
+/* ---- nested wells ---- */
+
+.well {
+  padding: 0.85rem;
+  border-radius: 0.9rem;
+  background: var(--bg);
+  border: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+.well--list {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.5rem;
+}
+
+.panel__action {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* ---- list rows ---- */
+
+.row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0.65rem;
+  border-radius: 0.7rem;
+  transition: background 0.18s ease;
+}
+
+.row:hover {
+  background: color-mix(in srgb, var(--paper) 5%, transparent);
+}
+
+.row__thumb,
+.row__icon {
+  display: grid;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
+  color: var(--paper);
+}
+
+.row__thumb svg,
+.row__icon svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.row__icon.is-hit {
+  background: color-mix(in srgb, #8fd39a 22%, transparent);
+  color: #8fd39a;
+}
+
+.row__icon.is-mid {
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
+  color: var(--paper-dim);
+}
+
+.row__icon.is-flop {
+  background: color-mix(in srgb, #e0a07a 22%, transparent);
+  color: #e0a07a;
+}
+
+.row__body {
+  min-width: 0;
+}
+
+.row__name {
+  font-size: 0.92rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row__meta {
+  margin-top: 0.15rem;
+  color: var(--mute);
+  font-size: 0.79rem;
+}
+
+.row input {
+  width: 100%;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+  background: var(--bg-2);
+  color: var(--paper);
+  font-size: 0.9rem;
+}
+
+/* ---- status pills ---- */
+
+.pill {
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: capitalize;
+}
+
+.pill.is-checked {
+  background: color-mix(in srgb, #8fd39a 18%, transparent);
+  color: #8fd39a;
+}
+
+.pill.is-posted {
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
+  color: var(--paper-dim);
+}
+
+.pill.is-draft {
+  background: color-mix(in srgb, var(--ember) 18%, transparent);
+  color: var(--ember);
+}
+
+/* ---- charts ---- */
+
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart__grid {
+  stroke: color-mix(in srgb, var(--paper) 8%, transparent);
+  stroke-width: 1;
+}
+
+.chart__tick {
+  fill: var(--mute);
+  font-size: 11px;
+}
+
+.chart__line {
+  fill: none;
+  stroke: var(--paper);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart__median {
+  stroke: color-mix(in srgb, var(--paper) 40%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.chart__dot {
+  fill: var(--paper);
+  stroke: var(--bg);
+  stroke-width: 2;
+}
+
+.chart__dot.is-hit {
+  fill: #8fd39a;
+}
+
+.chart__dot.is-flop {
+  fill: #e0a07a;
+}
+
+.donut {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.35rem 0.25rem;
+}
+
+.donut__ring {
+  position: relative;
+  width: 8.5rem;
+  flex-shrink: 0;
+}
+
+.donut__ring svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.donut__track,
+.donut__arc {
+  fill: none;
+  stroke-width: 14;
+}
+
+.donut__track {
+  stroke: color-mix(in srgb, var(--paper) 8%, transparent);
+}
+
+.donut__arc {
+  stroke-linecap: butt;
+}
+
+.donut__arc.is-hit {
+  stroke: #8fd39a;
+}
+
+.donut__arc.is-mid {
+  stroke: color-mix(in srgb, var(--paper) 32%, transparent);
+}
+
+.donut__arc.is-flop {
+  stroke: #e0a07a;
+}
+
+.donut__center {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  pointer-events: none;
+}
+
+.donut__center strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  letter-spacing: -0.03em;
+}
+
+.donut__center span {
+  color: var(--mute);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.donut__legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.donut__legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.85rem;
+}
+
+.donut__swatch {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.donut__swatch.is-hit {
+  background: #8fd39a;
+}
+
+.donut__swatch.is-mid {
+  background: color-mix(in srgb, var(--paper) 32%, transparent);
+}
+
+.donut__swatch.is-flop {
+  background: #e0a07a;
+}
+
+.donut__label {
+  color: var(--paper-dim);
+}
+
+.donut__value {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.donut__value em {
+  color: var(--mute);
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+
+/* ---- row action menu ---- */
+
+.history-menu {
+  position: relative;
+}
+
+.history-menu__dot {
+  display: grid;
+  gap: 0.16rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  cursor: pointer;
+}
+
+.history-menu__dot:hover {
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
+}
+
+.history-menu__dot span {
+  width: 0.22rem;
+  height: 0.22rem;
+  border-radius: 999px;
+  background: var(--paper);
+}
+
+.history-menu__list {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  transform-origin: top right;
+  z-index: 8;
+  display: grid;
+  gap: 0.1rem;
+  min-width: 9rem;
+  padding: 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  background: var(--bg-2);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+/* Covers both <button> items and the <a> used for external links. */
+.history-menu__list button,
+.history-menu__list a {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  text-align: left;
+  background: none;
+  color: var(--paper);
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.history-menu__list button:hover,
+.history-menu__list a:hover {
+  background: color-mix(in srgb, var(--paper) 8%, transparent);
+}
+
+.history-menu__list button.is-danger {
+  color: #e0a07a;
+}
+
+@media (max-width: 1100px) {
+  .dash__kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dash__row,
+  .dash__row--wide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .dash {
+    padding: 1.2rem 1.1rem 2rem;
+  }
+
+  .dash__kpis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dash__head {
+    flex-direction: column;
+  }
+
+  .donut {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .donut__ring {
+    width: 7.5rem;
+    margin: 0 auto;
+  }
+}

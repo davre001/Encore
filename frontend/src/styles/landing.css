@@ -1,0 +1,299 @@
+.landing {
+  overflow: hidden;
+  position: relative;
+}
+
+/*
+ * AnimatedMarqueeHero is `h-screen`, so the bar floats over it rather than
+ * stacking above and pushing the hero below the fold.
+ */
+.landing-bar--over {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+}
+
+/*
+ * Hero headline: heavy sans instead of the global Georgia serif.
+ *
+ * This rule is unlayered, so it beats both the `h1,h2,h3` base style in
+ * index.css and the component's own `font-bold tracking-tighter` utilities —
+ * Tailwind v4 puts utilities in `@layer utilities`, and unlayered author CSS
+ * outranks every layer.
+ */
+.landing h1 {
+  font-family: var(--font-ui);
+  font-weight: 900;
+  letter-spacing: -0.045em;
+  line-height: 0.92;
+}
+
+/*
+ * Per-word mask for the headline reveal. The padding/margin pair keeps
+ * descenders (the y in "Every", the g in "long") from being clipped.
+ */
+.hero__word {
+  display: inline-block;
+  overflow: hidden;
+  margin-right: 0.22em;
+  padding-bottom: 0.14em;
+  margin-bottom: -0.14em;
+  vertical-align: bottom;
+}
+
+.hero__word > span {
+  display: inline-block;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.95fr);
+  gap: 4rem;
+  align-items: center;
+  padding: 3.5rem 6vw 4.5rem;
+}
+
+.hero h1 {
+  font-size: clamp(3.4rem, 8vw, 6.4rem);
+  line-height: 0.88;
+  max-width: 8ch;
+}
+
+/*
+ * Each headline line is its own mask so the text can slide up into place.
+ * The padding/margin pair stops `overflow: hidden` clipping glyphs, since the
+ * line box (0.88em) is shorter than the glyphs themselves.
+ */
+.hero__line {
+  display: block;
+  overflow: hidden;
+  padding-bottom: 0.09em;
+  margin-bottom: -0.09em;
+}
+
+.hero__line > span {
+  display: block;
+}
+
+.lede {
+  max-width: 36rem;
+  margin-top: 1.4rem;
+  color: var(--paper-dim);
+  font-size: 1.12rem;
+  line-height: 1.55;
+}
+
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.hero__stage {
+  position: relative;
+}
+
+.hero__stage::before {
+  content: "";
+  position: absolute;
+  inset: -18% -10% auto;
+  height: 70%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--amber) 28%, transparent), transparent 68%);
+  pointer-events: none;
+}
+
+.tape {
+  position: relative;
+  padding: 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 1.4rem;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--paper) 6%, transparent), transparent 30%),
+    var(--bg-2);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+}
+
+.tape__top,
+.tape__note {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--mute);
+  font-size: 0.78rem;
+}
+
+.tape__dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--ember);
+}
+
+.tape__film {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.4rem;
+  margin: 1rem 0 1.1rem;
+}
+
+.tape__film span {
+  aspect-ratio: 3 / 4;
+  border-radius: 0.35rem;
+  background:
+    linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.35)),
+    repeating-linear-gradient(
+      90deg,
+      #1a1d24 0 8px,
+      #252a34 8px 16px
+    );
+}
+
+.tape__film span:nth-child(2),
+.tape__film span:nth-child(5) {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--amber) 35%, transparent), #1a1d24);
+}
+
+.takes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.take {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.65rem;
+  align-items: baseline;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  font-size: 0.84rem;
+}
+
+.take em {
+  color: var(--mute);
+  font-style: normal;
+}
+
+.take--yes {
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--line));
+}
+
+.take--no {
+  opacity: 0.55;
+}
+
+.tape__note {
+  margin-top: 0.9rem;
+}
+
+.how,
+.memory,
+.close {
+  padding: 4.5rem 6vw;
+}
+
+.how {
+  border-top: 1px solid var(--line);
+}
+
+.how h2,
+.memory h2,
+.close h2 {
+  font-size: clamp(2rem, 4vw, 3.4rem);
+  line-height: 1;
+  max-width: 14ch;
+  margin-bottom: 2rem;
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+
+.steps li {
+  padding: 1.4rem 1.3rem 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 1.1rem;
+  background: color-mix(in srgb, var(--bg-2) 80%, transparent);
+}
+
+.steps span {
+  color: var(--amber);
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+}
+
+.steps h3 {
+  margin: 0.7rem 0 0.55rem;
+  font-size: 1.45rem;
+}
+
+.steps p,
+.memory p,
+.memory__list li {
+  color: var(--paper-dim);
+  line-height: 1.55;
+}
+
+.memory {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr);
+  gap: 3rem;
+  align-items: start;
+  background:
+    radial-gradient(circle at 80% 20%, color-mix(in srgb, var(--ember) 18%, transparent), transparent 30%),
+    var(--bg);
+}
+
+.memory__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.memory__list li {
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.memory__list strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--paper);
+}
+
+.close {
+  text-align: center;
+  border-top: 1px solid var(--line);
+}
+
+.close h2 {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (max-width: 900px) {
+  .hero,
+  .memory,
+  .steps {
+    grid-template-columns: 1fr;
+  }
+
+  .hero {
+    padding-top: 3.5rem;
+    gap: 2.5rem;
+  }
+}

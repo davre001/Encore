@@ -1,0 +1,130 @@
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+  max-width: 52rem;
+  margin-left: auto;
+  margin-right: auto;
+  padding: 1.25rem 4vw 2.5rem;
+}
+
+.settings__intro h1 {
+  font-size: clamp(1.8rem, 3vw, 2.4rem);
+}
+
+.settings__intro p {
+  margin-top: 0.4rem;
+  color: var(--mute);
+  max-width: 40rem;
+  line-height: 1.5;
+}
+
+.settings__panels {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.settings .panel + .panel {
+  margin-top: 0;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.toggle-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.toggle-row p {
+  margin: 0.2rem 0 0;
+  color: var(--paper-dim);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 2.6rem;
+  height: 1.45rem;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 16%, var(--bg));
+  cursor: pointer;
+}
+
+.switch.is-on {
+  background: var(--amber);
+}
+
+.switch span {
+  position: absolute;
+  top: 0.16rem;
+  left: 0.16rem;
+  width: 1.12rem;
+  height: 1.12rem;
+  border-radius: 999px;
+  background: var(--paper);
+  transition: transform 0.15s ease;
+}
+
+.switch.is-on span {
+  transform: translateX(1.15rem);
+}
+
+.interval {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.interval button {
+  border-radius: 999px;
+}
+
+.interval button.is-on {
+  background: var(--amber);
+  color: var(--primary-foreground);
+  border-color: var(--amber);
+}
+
+.youtube-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  background: var(--bg);
+}
+
+.youtube-row strong {
+  display: block;
+}
+
+.youtube-row span {
+  color: var(--mute);
+  font-size: 0.82rem;
+}
+
+.settings__save {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.settings__saved {
+  color: var(--mute);
+  font-size: 0.85rem;
+}

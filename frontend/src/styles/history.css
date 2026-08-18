@@ -1,0 +1,307 @@
+/* History page — filter bar, unified list, and the flop diagnosis drawer. */
+
+.hist__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.hist__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--mute);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.chip:hover {
+  color: var(--paper);
+  border-color: var(--paper-dim);
+}
+
+.chip.is-on {
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
+  border-color: color-mix(in srgb, var(--paper) 22%, transparent);
+  color: var(--paper);
+}
+
+.chip em {
+  font-style: normal;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--mute);
+}
+
+.chip.is-on em {
+  color: var(--paper-dim);
+}
+
+.hist__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--mute);
+  font-size: 0.82rem;
+}
+
+.hist__sort select {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--bg-2);
+  color: var(--paper);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+/* ---- list ---- */
+
+.hist__list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.hist__item {
+  border: 1px solid var(--line);
+  border-radius: 0.95rem;
+  background: var(--bg-2);
+  /* No `overflow: hidden` here — it would clip the three-dot dropdown (and the
+     button itself on narrow widths). The diagnosis drawer does its own height
+     clipping via `.hist__why`, and `.hist__why-inner` is inset from the corners. */
+}
+
+.hist__item.is-open {
+  border-color: color-mix(in srgb, var(--ember) 40%, var(--line));
+}
+
+.hist__row {
+  display: grid;
+  /* icon · body · views · pill · dots. The last track is fixed to the dot
+     button's width, and views/pill are shared `auto` columns, so every row's
+     pill and three-dot control land on the same vertical line regardless of
+     which optional cells a given row fills. */
+  grid-template-columns: auto minmax(0, 1fr) auto auto 1.75rem;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.85rem 0.95rem;
+}
+
+.hist__views {
+  display: grid;
+  justify-items: end;
+  line-height: 1.15;
+}
+
+.hist__views strong {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hist__views span {
+  color: var(--mute);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hist__row .pill {
+  justify-self: end;
+}
+
+.hist__actions {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+}
+
+/* Compact outline pill that lives inside the row body (under the meta line) and
+   toggles the flop-diagnosis drawer. It was moved out of `.hist__actions` so
+   that column holds only the fixed-width three-dot control — its variable width
+   was what knocked the pills and dots out of vertical alignment across rows. */
+.hist__why-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+  padding: 0.32rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--paper);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.hist__why-toggle:hover {
+  border-color: var(--paper-dim);
+}
+
+.hist__why-toggle.is-on {
+  background: color-mix(in srgb, var(--ember) 16%, transparent);
+  border-color: color-mix(in srgb, var(--ember) 45%, var(--line));
+}
+
+.hist__caret {
+  width: 0.9rem;
+  height: 0.9rem;
+  transition: transform 0.2s ease;
+}
+
+.hist__caret.is-up {
+  transform: rotate(180deg);
+}
+
+/* Extra pill/icon states this page introduces on top of home.css. */
+.row__icon.is-draft,
+.row__icon.is-leftover,
+.row__icon.is-posted {
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
+  color: var(--paper-dim);
+}
+
+.pill.is-leftover {
+  background: color-mix(in srgb, var(--paper) 8%, transparent);
+  color: var(--mute);
+}
+
+.pill.is-hit {
+  background: color-mix(in srgb, #8fd39a 18%, transparent);
+  color: #8fd39a;
+}
+
+.pill.is-mid {
+  background: color-mix(in srgb, var(--paper) 10%, transparent);
+  color: var(--paper-dim);
+}
+
+.pill.is-flop {
+  background: color-mix(in srgb, #e0a07a 20%, transparent);
+  color: #e0a07a;
+}
+
+/* ---- diagnosis drawer ---- */
+
+/* Height animates on the wrapper; padding lives on the inner block so nothing
+   shows at height 0. */
+.hist__why {
+  overflow: hidden;
+}
+
+.hist__why-inner {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.1rem;
+  margin: 0 0.95rem 0.95rem;
+  padding: 0.95rem 1rem 1.05rem;
+  border-radius: 0.8rem;
+  background: var(--bg);
+  border: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+.hist__why-inner h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.6rem;
+  font-family: var(--font-ui);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.hist__why-inner h3 svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.hist__why-inner section:first-child h3 svg {
+  color: #e0a07a;
+}
+
+.hist__why-inner section:last-child h3 svg {
+  color: var(--ember);
+}
+
+.hist__why-inner ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.hist__why-inner li {
+  position: relative;
+  padding-left: 0.95rem;
+  color: var(--paper-dim);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.hist__why-inner li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 0.3rem;
+  height: 0.3rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 35%, transparent);
+}
+
+.hist__why-inner .btn {
+  margin-top: 0.85rem;
+}
+
+.hist__why-inner .btn svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+@media (max-width: 760px) {
+  .hist__row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: 0.5rem;
+    align-items: start;
+  }
+
+  /* Row 1: icon · body · dots.  Row 2 (under the body): views · pill. */
+  .hist__actions {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .hist__views {
+    grid-column: 2;
+    grid-row: 2;
+    justify-items: start;
+  }
+
+  .hist__row .pill {
+    grid-column: 3;
+    grid-row: 2;
+  }
+
+  .hist__why-inner {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -1,0 +1,241 @@
+.analytics {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.25rem 4vw 2.5rem;
+}
+
+.analytics__intro h1 {
+  font-size: clamp(1.8rem, 3vw, 2.4rem);
+}
+
+.analytics__intro p {
+  margin-top: 0.4rem;
+  color: var(--mute);
+  max-width: 42rem;
+  line-height: 1.5;
+}
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.kpi {
+  padding: 1rem 1.05rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--bg-2) 88%, transparent);
+}
+
+.kpi__label {
+  color: var(--mute);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.kpi__value {
+  margin-top: 0.45rem;
+  font-family: var(--font-display);
+  font-size: 1.85rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  /* Keeps the box from jittering while <CountUp> animates the digits. */
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi__hint {
+  margin-top: 0.25rem;
+  color: var(--paper-dim);
+  font-size: 0.8rem;
+}
+
+.analytics__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 1.25rem;
+}
+
+.bars {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.55rem;
+  align-items: end;
+  height: 12rem;
+  padding-top: 0.5rem;
+}
+
+.bars__col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  height: 100%;
+}
+
+.bars__stack {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  height: 100%;
+}
+
+.bars__fill {
+  width: 100%;
+  border-radius: 0.4rem 0.4rem 0.15rem 0.15rem;
+  background: var(--amber);
+  min-height: 0.35rem;
+}
+
+.bars__fill.is-flop {
+  background: color-mix(in srgb, #c45c26 80%, var(--amber));
+}
+
+.bars__fill.is-mid {
+  background: color-mix(in srgb, var(--paper) 35%, var(--amber));
+}
+
+.bars__median {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--paper) 45%, transparent);
+}
+
+.bars__day {
+  color: var(--mute);
+  font-size: 0.72rem;
+}
+
+.verdict-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.verdict {
+  padding: 0.75rem 0.8rem;
+  border-radius: 0.8rem;
+  border: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.verdict strong {
+  display: block;
+  font-size: 1.35rem;
+  font-family: var(--font-display);
+}
+
+.verdict span {
+  color: var(--mute);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.playbook,
+.leftover-list,
+.post-table {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.playbook__row,
+.leftover {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.85rem;
+  border: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.playbook__top,
+.leftover__top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.playbook__rate {
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.playbook__note,
+.leftover p {
+  color: var(--paper-dim);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.post-table {
+  width: 100%;
+  border-collapse: collapse;
+  display: table;
+}
+
+.post-table th,
+.post-table td {
+  text-align: left;
+  padding: 0.65rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.88rem;
+}
+
+.post-table th {
+  color: var(--mute);
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.post-table a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.tag-hit {
+  color: #8fd39a;
+}
+
+.tag-flop {
+  color: #e0a07a;
+}
+
+.tag-mid {
+  color: var(--paper-dim);
+}
+
+@media (max-width: 960px) {
+  .kpi-row,
+  .analytics__grid,
+  .verdict-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .analytics__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .kpi-row,
+  .verdict-row {
+    grid-template-columns: 1fr;
+  }
+
+  .post-table {
+    display: block;
+    overflow-x: auto;
+  }
+}

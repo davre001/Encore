@@ -1,0 +1,87 @@
+.btn,
+.switch,
+.history-menu__dot,
+.nav__links a,
+.landing-bar__links a,
+.upload__btn {
+  transition:
+    transform 0.18s ease,
+    opacity 0.18s ease,
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.btn:hover,
+.upload__btn:hover {
+  transform: translateY(-2px);
+}
+
+.btn:active,
+.upload__btn:active,
+.switch:active,
+.history-menu__dot:active {
+  transform: translateY(1px) scale(0.97);
+}
+
+.btn--primary:hover,
+.btn--small:hover {
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+/*
+ * Motion writes `transform` inline on the elements it animates, which would
+ * override a CSS :hover transform. So `.kpi`, `.metric`, `.moment-card` and
+ * `.clip-card` get their lift from `hoverLift` in lib/motion.ts and keep only
+ * the colour half here. `.panel` is not Motion-animated, so it keeps both.
+ */
+.panel {
+  transition:
+    transform 0.22s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.kpi,
+.metric,
+.moment-card,
+.clip-card,
+.post-card,
+.playbook__row,
+.leftover {
+  transition:
+    border-color 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.panel:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--foreground) 28%, var(--border));
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.kpi:hover,
+.metric:hover,
+.moment-card:hover,
+.clip-card:hover {
+  border-color: color-mix(in srgb, var(--foreground) 28%, var(--border));
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+/* Positioning context for the sliding `.nav__pill`. */
+.nav__links a {
+  position: relative;
+}
+
+.bars__fill {
+  transform-origin: bottom;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

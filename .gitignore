@@ -5,6 +5,11 @@ __pycache__/
 *.pyc
 node_modules/
 dist/
+.next/
+out/
+# Next.js / TypeScript build artifacts (auto-generated, per official create-next-app)
+next-env.d.ts
+*.tsbuildinfo
 .DS_Store
 uploads/*
 !uploads/.gitkeep

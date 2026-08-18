@@ -1,0 +1,289 @@
+/*
+ * Left-hand sidebar. Replaces the old sticky top bar — `.shell` becomes a
+ * two-column grid (sidebar + main) in index.css, so this renders on every
+ * signed-in page.
+ */
+.side {
+  grid-area: side;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1.4rem 1rem;
+  background: var(--bg-2);
+  border-right: 1px solid var(--line);
+}
+
+.nav__mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+}
+
+.nav__glyph {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: var(--primary);
+}
+
+.side__brand {
+  padding: 0.35rem 0.6rem;
+}
+
+.side__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.side__link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0.75rem;
+  border-radius: 0.8rem;
+  color: var(--mute);
+  font-size: 0.94rem;
+  transition: color 0.18s ease;
+}
+
+.side__link:hover {
+  color: var(--paper);
+}
+
+.side__link.is-active {
+  color: var(--paper);
+}
+
+/* Sits behind the icon and label; slides between items via layoutId. */
+.side__pill {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--paper) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--paper) 16%, transparent);
+}
+
+.side__icon {
+  position: relative;
+  z-index: 1;
+  width: 1.15rem;
+  height: 1.15rem;
+  flex-shrink: 0;
+}
+
+.side__label {
+  position: relative;
+  z-index: 1;
+}
+
+.side__divider {
+  height: 1px;
+  margin: 0.55rem 0.4rem;
+  background: var(--line);
+}
+
+/* Account row is now a <button> that opens a menu; the wrapper owns the
+   `margin-top: auto` that pins it to the sidebar base and anchors the popover. */
+.side__account {
+  position: relative;
+  margin-top: auto;
+}
+
+.side__user {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem;
+  border-radius: 0.9rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.side__user:hover,
+.side__user.is-open {
+  background: color-mix(in srgb, var(--paper) 6%, transparent);
+  border-color: var(--line);
+}
+
+/* Popover of account actions, opening upward from the pinned row. */
+.side__menu {
+  position: absolute;
+  left: 0.25rem;
+  right: 0.25rem;
+  bottom: calc(100% + 0.4rem);
+  z-index: 40;
+  min-width: 12rem;
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.35rem;
+  border-radius: 0.8rem;
+  border: 1px solid var(--line);
+  background: var(--popover);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+  transform-origin: bottom center;
+}
+
+.side__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.6rem 0.7rem;
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: var(--paper);
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.side__menu-item:hover {
+  background: color-mix(in srgb, var(--paper) 8%, transparent);
+}
+
+.side__menu-item svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex-shrink: 0;
+  color: var(--mute);
+}
+
+.side__menu-item.is-danger,
+.side__menu-item.is-danger svg {
+  color: #e0a07a;
+}
+
+.side__menu-item.is-danger:hover {
+  background: color-mix(in srgb, #e0a07a 14%, transparent);
+}
+
+.side__avatar {
+  width: 2.1rem;
+  height: 2.1rem;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ember) 30%, var(--bg));
+  color: var(--paper);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.side__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.side__who {
+  display: grid;
+  min-width: 0;
+}
+
+.side__who strong {
+  font-size: 0.9rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side__who span {
+  color: var(--mute);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side__chevron {
+  width: 1rem;
+  height: 1rem;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--mute);
+  transition: transform 0.2s ease;
+}
+
+/* Points up while the menu is open (the menu opens above the row). */
+.side__user.is-open .side__chevron {
+  transform: rotate(-90deg);
+}
+
+/* Below 900px the sidebar becomes a fixed bottom bar of icons. */
+@media (max-width: 900px) {
+  .side {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 30;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-around;
+    gap: 0.25rem;
+    padding: 0.5rem 0.6rem;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg-2) 94%, transparent);
+    backdrop-filter: blur(14px);
+  }
+
+  .side__brand,
+  .side__divider,
+  .side__who,
+  .side__chevron {
+    display: none;
+  }
+
+  .side__nav {
+    flex-direction: row;
+    gap: 0.15rem;
+    flex: 1;
+    justify-content: space-around;
+  }
+
+  .side__link {
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.68rem;
+  }
+
+  .side__account {
+    margin-top: 0;
+  }
+
+  .side__user {
+    padding: 0.4rem;
+  }
+
+  /* Anchored to the account button on the right of the bar; grows leftward and
+     upward so it never runs off-screen. */
+  .side__menu {
+    left: auto;
+    right: 0;
+    bottom: calc(100% + 0.6rem);
+  }
+}

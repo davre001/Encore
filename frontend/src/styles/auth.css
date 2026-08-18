@@ -1,0 +1,78 @@
+.btn--google {
+  background: var(--paper);
+  color: var(--primary-foreground);
+  border-color: var(--paper);
+}
+
+.btn--google:hover {
+  opacity: 0.9;
+}
+
+.btn--google svg {
+  flex-shrink: 0;
+}
+
+.landing-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 6vw 0;
+}
+
+.landing-bar__links {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  color: var(--mute);
+  font-size: 0.92rem;
+}
+
+.landing-bar__links a:hover {
+  color: var(--paper);
+}
+
+.hero__hint {
+  margin-top: 0.9rem;
+  color: var(--mute);
+  font-size: 0.88rem;
+}
+
+.auth {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 70vh;
+  padding: 4rem 6vw;
+  max-width: 36rem;
+}
+
+.auth__mark {
+  margin-bottom: 2rem;
+}
+
+.auth h1 {
+  font-size: clamp(2.6rem, 6vw, 4.4rem);
+  line-height: 0.92;
+  margin-bottom: 0.8rem;
+}
+
+.auth p {
+  color: var(--paper-dim);
+  margin-bottom: 1.6rem;
+  line-height: 1.5;
+}
+
+.auth__switch {
+  margin-top: 1.2rem;
+  color: var(--mute);
+  font-size: 0.92rem;
+}
+
+.auth__switch a {
+  color: var(--amber);
+}
+
+.auth__switch a:hover {
+  color: var(--paper);
+}
