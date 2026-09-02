@@ -18,3 +18,7 @@ data/*
 *.mp4
 *.webm
 *.mov
+
+# Dev-server logs and local UI-review screenshots (not part of the app source)
+*.log
+/ui-review/

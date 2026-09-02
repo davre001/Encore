@@ -35,6 +35,8 @@ export type Clip = {
   posted: boolean;
   postUrl?: string;
   postId?: string;
+  /** Held on its last frame — a freeze from the clip context menu. */
+  frozen?: boolean;
 };
 
 export type PostCheck = {

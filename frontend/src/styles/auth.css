@@ -31,6 +31,22 @@
   color: var(--paper);
 }
 
+.landing-bar__signup {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 1.05rem;
+  border-radius: 0.75rem;
+  background: #b45309;
+  color: #fff;
+  font-weight: 600;
+}
+
+.landing-bar__signup:hover {
+  background: #92400e;
+  color: #fff;
+}
+
 .hero__hint {
   margin-top: 0.9rem;
   color: var(--mute);

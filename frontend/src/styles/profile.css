@@ -1,41 +1,56 @@
+/*
+ * Profile is a full-bleed dashboard, not a narrow centered form. The page fills
+ * the shell (`.dash`-style top-aligned padding) and its body is a two-column
+ * grid — a slim identity summary card on the left, a wide editable form on the
+ * right. Both cards stretch to fill their columns, so nothing floats as a
+ * stranded 44rem text box the way the old single-column layout did. Collapses
+ * to one column below 900px.
+ */
 .profile {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
   width: 100%;
-  max-width: 40rem;
-  margin-left: auto;
-  margin-right: auto;
-  padding: 1.25rem 4vw 2.5rem;
+  padding: 1.6rem 2rem 2.5rem;
 }
 
-.profile__intro h1 {
-  font-size: clamp(1.8rem, 3vw, 2.4rem);
+.profile__head h1 {
+  font-size: clamp(1.7rem, 2.6vw, 2.2rem);
 }
 
-.profile__intro p {
+.profile__head p {
   margin-top: 0.4rem;
   color: var(--mute);
+  font-size: 0.92rem;
   line-height: 1.5;
 }
 
-.profile__who {
+.profile__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.7fr);
+  gap: 1.15rem;
+  align-items: start;
+}
+
+/* ---- identity summary card ---- */
+
+.profile__card {
   display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-bottom: 1.1rem;
+  flex-direction: column;
+  gap: 0.9rem;
 }
 
 .profile__avatar {
   display: grid;
   place-items: center;
-  width: 4.25rem;
-  height: 4.25rem;
+  width: 5rem;
+  height: 5rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--amber) 28%, var(--bg));
-  border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--line));
+  background: color-mix(in srgb, var(--ember) 20%, var(--bg-2));
+  border: 1px solid color-mix(in srgb, var(--ember) 35%, var(--line));
+  color: var(--paper);
   font-family: var(--font-display);
-  font-size: 1.6rem;
+  font-size: 1.8rem;
   font-weight: 700;
   overflow: hidden;
 }
@@ -46,14 +61,84 @@
   object-fit: cover;
 }
 
-.profile__who strong {
+.profile__id strong {
   display: block;
+  font-size: 1.2rem;
+  letter-spacing: -0.01em;
+}
+
+.profile__id span {
+  color: var(--mute);
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+.profile__stats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line);
+}
+
+.profile__stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.profile__stat dt {
+  color: var(--mute);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.profile__stat dd {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: right;
+  word-break: break-word;
+}
+
+.profile__bio-preview {
+  margin: 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line);
+  color: var(--mute);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+/* ---- editable form card ---- */
+
+.profile__form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.profile__form-head h2 {
   font-size: 1.15rem;
 }
 
-.profile__who span {
+.profile__form-head p {
+  margin-top: 0.3rem;
   color: var(--mute);
   font-size: 0.88rem;
+}
+
+.profile__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem 1.1rem;
+}
+
+.profile__fields .field--full {
+  grid-column: 1 / -1;
 }
 
 .profile__actions {
@@ -61,4 +146,22 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
+  padding-top: 1.15rem;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 900px) {
+  .profile__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .profile {
+    padding: 1.2rem 1.1rem 2rem;
+  }
+
+  .profile__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

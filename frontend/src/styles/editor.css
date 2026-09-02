@@ -187,13 +187,13 @@
 }
 
 .btn--danger {
-  border-color: color-mix(in srgb, #c45c26 50%, var(--line));
-  color: #f0c4a8;
+  border-color: color-mix(in srgb, var(--flop) 50%, var(--line));
+  color: var(--flop);
   background: transparent;
 }
 
 .btn--danger:hover {
-  border-color: #c45c26;
+  border-color: var(--flop);
 }
 
 .clip-card__tags {
@@ -351,11 +351,11 @@
 }
 
 .post-card.is-hit {
-  border-color: color-mix(in srgb, #6bcb77 45%, var(--line));
+  border-color: color-mix(in srgb, var(--good) 45%, var(--line));
 }
 
 .post-card.is-flop {
-  border-color: color-mix(in srgb, #c45c26 45%, var(--line));
+  border-color: color-mix(in srgb, var(--flop) 45%, var(--line));
 }
 
 .post-card__verdict {

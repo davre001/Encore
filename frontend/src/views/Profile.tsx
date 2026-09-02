@@ -51,108 +51,126 @@ export default function Profile() {
 
   return (
     <main className="profile">
-      <Reveal as="header" className="profile__intro">
-        <h1>You</h1>
+      <Reveal as="header" className="profile__head">
+        <h1>Profile</h1>
         <p>Name, email, and how you show up. Voice and YouTube live on Settings.</p>
       </Reveal>
 
-      <Stagger as="section" className="panel" stagger={0.06}>
-        <StaggerItem className="profile__who">
+      <div className="profile__grid">
+        {/* Identity summary — mirrors the live form values. */}
+        <Reveal as="section" className="panel profile__card">
           <div className="profile__avatar">
-            {current.picture ? (
-              <img src={current.picture} alt="" />
-            ) : (
-              initial
-            )}
+            {current.picture ? <img src={current.picture} alt="" /> : initial}
           </div>
-          <div>
+          <div className="profile__id">
             <strong>{name || current.name}</strong>
             <span>{email || current.email}</span>
           </div>
-        </StaggerItem>
+          <dl className="profile__stats">
+            <div className="profile__stat">
+              <dt>Handle</dt>
+              <dd>{handle || "—"}</dd>
+            </div>
+            <div className="profile__stat">
+              <dt>Niche</dt>
+              <dd>{niche || "—"}</dd>
+            </div>
+          </dl>
+          {bio ? <p className="profile__bio-preview">{bio}</p> : null}
+        </Reveal>
 
-        <StaggerItem className="field" style={{ marginBottom: "0.85rem" }}>
-          <label htmlFor="name">Name</label>
-          <input
-            id="name"
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              setSaved(false);
-            }}
-          />
-        </StaggerItem>
-        <StaggerItem className="field" style={{ marginBottom: "0.85rem" }}>
-          <label htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              setSaved(false);
-            }}
-          />
-        </StaggerItem>
-        <StaggerItem className="field" style={{ marginBottom: "0.85rem" }}>
-          <label htmlFor="handle">Handle</label>
-          <input
-            id="handle"
-            placeholder="@you"
-            value={handle}
-            onChange={(e) => {
-              setHandle(e.target.value);
-              setSaved(false);
-            }}
-          />
-        </StaggerItem>
-        <StaggerItem className="field" style={{ marginBottom: "0.85rem" }}>
-          <label htmlFor="niche">Niche</label>
-          <input
-            id="niche"
-            placeholder="Study vlogs, indie games…"
-            value={niche}
-            onChange={(e) => {
-              setNiche(e.target.value);
-              setSaved(false);
-            }}
-          />
-        </StaggerItem>
-        <StaggerItem className="field">
-          <label htmlFor="bio">Bio</label>
-          <textarea
-            id="bio"
-            rows={4}
-            placeholder="One or two lines Encore can steal for captions."
-            value={bio}
-            onChange={(e) => {
-              setBio(e.target.value);
-              setSaved(false);
-            }}
-          />
-        </StaggerItem>
-      </Stagger>
+        {/* Editable details. */}
+        <Reveal as="section" className="panel profile__form">
+          <header className="profile__form-head">
+            <h2>Personal information</h2>
+            <p>Changes save to this device.</p>
+          </header>
 
-      <div className="profile__actions">
-        <button type="button" className="btn btn--primary" onClick={handleSave}>
-          Save
-        </button>
-        <button type="button" className="btn btn--danger" onClick={handleSignOut}>
-          Sign out
-        </button>
-        <AnimatePresence>
-          {saved ? (
-            <motion.span
-              className="settings__saved"
-              initial={{ opacity: 0, x: -6 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -6 }}
-              transition={{ duration: DUR.fast, ease: EASE }}
-            >
-              Saved on this device
-            </motion.span>
-          ) : null}
-        </AnimatePresence>
+          <Stagger className="profile__fields" stagger={0.05}>
+            <StaggerItem className="field">
+              <label htmlFor="name">Name</label>
+              <input
+                id="name"
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setSaved(false);
+                }}
+              />
+            </StaggerItem>
+            <StaggerItem className="field">
+              <label htmlFor="email">Email</label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setSaved(false);
+                }}
+              />
+            </StaggerItem>
+            <StaggerItem className="field">
+              <label htmlFor="handle">Handle</label>
+              <input
+                id="handle"
+                placeholder="@you"
+                value={handle}
+                onChange={(e) => {
+                  setHandle(e.target.value);
+                  setSaved(false);
+                }}
+              />
+            </StaggerItem>
+            <StaggerItem className="field">
+              <label htmlFor="niche">Niche</label>
+              <input
+                id="niche"
+                placeholder="Study vlogs, indie games…"
+                value={niche}
+                onChange={(e) => {
+                  setNiche(e.target.value);
+                  setSaved(false);
+                }}
+              />
+            </StaggerItem>
+            <StaggerItem className="field field--full">
+              <label htmlFor="bio">Bio</label>
+              <textarea
+                id="bio"
+                rows={4}
+                placeholder="One or two lines Encore can steal for captions."
+                value={bio}
+                onChange={(e) => {
+                  setBio(e.target.value);
+                  setSaved(false);
+                }}
+              />
+            </StaggerItem>
+          </Stagger>
+
+          <div className="profile__actions">
+            <button type="button" className="btn btn--primary" onClick={handleSave}>
+              Save changes
+            </button>
+            <button type="button" className="btn btn--danger" onClick={handleSignOut}>
+              Sign out
+            </button>
+            <AnimatePresence>
+              {saved ? (
+                <motion.span
+                  className="settings__saved"
+                  initial={{ opacity: 0, x: -6 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -6 }}
+                  transition={{ duration: DUR.fast, ease: EASE }}
+                >
+                  Saved on this device
+                </motion.span>
+              ) : null}
+            </AnimatePresence>
+          </div>
+        </Reveal>
       </div>
     </main>
   );

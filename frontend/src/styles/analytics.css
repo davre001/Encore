@@ -92,7 +92,7 @@
 }
 
 .bars__fill.is-flop {
-  background: color-mix(in srgb, #c45c26 80%, var(--amber));
+  background: color-mix(in srgb, var(--flop) 80%, var(--amber));
 }
 
 .bars__fill.is-mid {
@@ -205,11 +205,11 @@
 }
 
 .tag-hit {
-  color: #8fd39a;
+  color: var(--good);
 }
 
 .tag-flop {
-  color: #e0a07a;
+  color: var(--flop);
 }
 
 .tag-mid {

@@ -72,20 +72,101 @@
 
 .hist__list {
   display: grid;
-  gap: 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--bg-2);
 }
 
+/*
+ * Rows share one bordered panel (`.hist__list`) divided by hairlines, rather
+ * than each floating as its own rounded card — the flat, unified data-table
+ * look. The first/last rows round to the panel corners so their hover/open
+ * background tints follow the radius. No `overflow: hidden` on the list: it
+ * would clip the three-dot dropdown; each row's own background already clips to
+ * its border-radius, and the diagnosis drawer insets itself from the corners.
+ */
 .hist__item {
-  border: 1px solid var(--line);
-  border-radius: 0.95rem;
-  background: var(--bg-2);
-  /* No `overflow: hidden` here — it would clip the three-dot dropdown (and the
-     button itself on narrow widths). The diagnosis drawer does its own height
-     clipping via `.hist__why`, and `.hist__why-inner` is inset from the corners. */
+  position: relative;
+  transition: background 0.18s ease;
+}
+
+.hist__item + .hist__item {
+  border-top: 1px solid var(--line);
+}
+
+.hist__item:first-child {
+  border-radius: 1rem 1rem 0 0;
+}
+
+.hist__item:last-child {
+  border-radius: 0 0 1rem 1rem;
+}
+
+.hist__item:not(.hist__item--skeleton):hover {
+  background: color-mix(in srgb, var(--paper) 4%, transparent);
 }
 
 .hist__item.is-open {
-  border-color: color-mix(in srgb, var(--ember) 40%, var(--line));
+  background: color-mix(in srgb, var(--ember) 8%, transparent);
+}
+
+/* ---- loading skeleton ----
+   Reuses `.hist__item` / `.hist__row` so the placeholder rows have the exact
+   footprint of the real ones — the list swap is a content change, not a layout
+   shift. Shown only until localStorage projects load in a post-mount effect. */
+.hist__item--skeleton {
+  pointer-events: none;
+}
+
+.skeleton {
+  display: block;
+  height: 0.85rem;
+  border-radius: 0.4rem;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--paper) 6%, transparent) 25%,
+    color-mix(in srgb, var(--paper) 14%, transparent) 50%,
+    color-mix(in srgb, var(--paper) 6%, transparent) 75%
+  );
+  background-size: 200% 100%;
+  animation: hist-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton--icon {
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 999px;
+}
+
+.skeleton--line {
+  max-width: 100%;
+}
+
+.skeleton--sm {
+  height: 0.7rem;
+  margin-top: 0.55rem;
+}
+
+.skeleton--pill {
+  width: 4rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  justify-self: end;
+}
+
+@keyframes hist-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
 }
 
 .hist__row {
@@ -97,7 +178,7 @@
   grid-template-columns: auto minmax(0, 1fr) auto auto 1.75rem;
   align-items: center;
   gap: 0.85rem;
-  padding: 0.85rem 0.95rem;
+  padding: 0.95rem 1.1rem;
 }
 
 .hist__views {
@@ -182,8 +263,8 @@
 }
 
 .pill.is-hit {
-  background: color-mix(in srgb, #8fd39a 18%, transparent);
-  color: #8fd39a;
+  background: color-mix(in srgb, var(--good) 18%, transparent);
+  color: var(--good);
 }
 
 .pill.is-mid {
@@ -192,8 +273,8 @@
 }
 
 .pill.is-flop {
-  background: color-mix(in srgb, #e0a07a 20%, transparent);
-  color: #e0a07a;
+  background: color-mix(in srgb, var(--flop) 20%, transparent);
+  color: var(--flop);
 }
 
 /* ---- diagnosis drawer ---- */
@@ -208,7 +289,7 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1.1rem;
-  margin: 0 0.95rem 0.95rem;
+  margin: 0 1.1rem 1.1rem;
   padding: 0.95rem 1rem 1.05rem;
   border-radius: 0.8rem;
   background: var(--bg);
@@ -234,7 +315,7 @@
 }
 
 .hist__why-inner section:first-child h3 svg {
-  color: #e0a07a;
+  color: var(--flop);
 }
 
 .hist__why-inner section:last-child h3 svg {

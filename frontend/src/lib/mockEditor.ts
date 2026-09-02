@@ -4,45 +4,61 @@ function id(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-export function buildVideo(file: File): Video {
+// When a picked file can't report its real length (or before it's probed), the
+// timeline still needs a sane span — the verify harness uploads a stand-in that
+// never decodes, so this is the floor it falls back to.
+export const FALLBACK_DURATION = 184;
+
+export function buildVideo(file: File, duration = FALLBACK_DURATION): Video {
   return {
     id: id("vid"),
     name: file.name,
-    duration: 184,
+    duration: duration > 0 && Number.isFinite(duration) ? duration : FALLBACK_DURATION,
     createdAt: Date.now(),
   };
 }
 
-export function buildMoments(videoId: string): Moment[] {
-  return [
-    {
+// The three demo beats, expressed as fractions of the take so they land in the
+// right place whatever the real duration is — a 30 s clip gets three short cuts,
+// a 12 min take gets three long ones. Filtered so a very short take never yields
+// an inverted or out-of-bounds cut.
+const BEATS: { at: [number, number]; label: string; reason: string }[] = [
+  {
+    at: [0.1, 0.24],
+    label: "Confession hook",
+    reason: "Strong open. Your last two confession hooks beat tutorials.",
+  },
+  {
+    at: [0.34, 0.5],
+    label: "Talking-head tip",
+    reason: "You rejected two of these last week. Skip unless you want it.",
+  },
+  {
+    at: [0.7, 0.84],
+    label: "Exam-panic rant",
+    reason: "Good leftover energy. Saved well for Shorts.",
+  },
+];
+
+export function buildMoments(
+  videoId: string,
+  duration = FALLBACK_DURATION,
+): Moment[] {
+  const span = duration > 0 && Number.isFinite(duration) ? duration : FALLBACK_DURATION;
+  const round = (n: number) => Math.round(n * 10) / 10;
+  return BEATS.map((beat) => {
+    const start = round(beat.at[0] * span);
+    const end = round(beat.at[1] * span);
+    return {
       id: id("mom"),
       videoId,
-      start: 18,
-      end: 41,
-      label: "Confession hook",
-      reason: "Strong open. Your last two confession hooks beat tutorials.",
-      status: "pending",
-    },
-    {
-      id: id("mom"),
-      videoId,
-      start: 62,
-      end: 88,
-      label: "Talking-head tip",
-      reason: "You rejected two of these last week. Skip unless you want it.",
-      status: "pending",
-    },
-    {
-      id: id("mom"),
-      videoId,
-      start: 130,
-      end: 151,
-      label: "Exam-panic rant",
-      reason: "Good leftover energy. Saved well for Shorts.",
-      status: "pending",
-    },
-  ];
+      start,
+      end,
+      label: beat.label,
+      reason: beat.reason,
+      status: "pending" as const,
+    };
+  }).filter((moment) => moment.end > moment.start + 0.4 && moment.end <= span);
 }
 
 export function buildClipFromMoment(moment: Moment, videoId: string): Clip {

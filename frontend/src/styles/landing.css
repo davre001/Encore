@@ -1,11 +1,373 @@
 .landing {
-  overflow: hidden;
+  /* No `overflow` here: the moon-glow hero self-clips its own FX
+     (.landing-fx { overflow:hidden }) and each story FlowSection clips its own
+     rotating inner, so this element must stay a normal block. An `overflow`
+     value would turn it into a scroll container and fight GSAP ScrollTrigger's
+     pinning of the story sections below the hero. */
   position: relative;
 }
 
+.landing--agent {
+  min-height: 100vh;
+  background: #140c08;
+}
+
 /*
- * AnimatedMarqueeHero is `h-screen`, so the bar floats over it rather than
- * stacking above and pushing the hero below the fold.
+ * The Ruixen "moon": the glowing rim-lit limb of a huge sphere rising from
+ * just below the frame. This is the demo's signature background, recolored
+ * from its original blue/violet to burnt brown — a bright cream/amber rim
+ * over near-black, warm fill below the arc, darkness above it.
+ *
+ * Built from stacked radial gradients (no photograph), so the first paint
+ * always matches refresh — nothing to decode, nothing to flash.
+ */
+.landing-moon {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  min-height: 100svh;
+  background-color: #050304;
+  background-image:
+    /* crisp rim-lit limb — bright arc near the ellipse edge */
+    radial-gradient(
+      96% 74% at 50% 125%,
+      rgba(120, 56, 26, 0.36) 0%,
+      rgba(168, 80, 32, 0.5) 54%,
+      rgba(255, 241, 208, 0.92) 82%,
+      rgba(242, 165, 74, 0.6) 87%,
+      rgba(96, 44, 22, 0.28) 93%,
+      rgba(5, 3, 4, 0) 100%
+    ),
+    /* soft halo bloom above the rim */
+    radial-gradient(
+      132% 98% at 50% 120%,
+      rgba(180, 83, 9, 0.32) 54%,
+      rgba(120, 45, 18, 0.13) 74%,
+      rgba(5, 3, 4, 0) 88%
+    );
+}
+
+/* Darkens only the top and bottom edges — enough contrast for the headline
+ * and the quick-action row without washing out the moon glow at center. */
+.landing-moon__scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(5, 3, 4, 0.62) 0%,
+    rgba(5, 3, 4, 0) 22%,
+    rgba(5, 3, 4, 0) 76%,
+    rgba(5, 3, 4, 0.6) 100%
+  );
+}
+
+/*
+ * Seam between the hero and the story section below it.
+ *
+ * The story opens on amber #B45309, so the foot of the hero fades into that
+ * exact colour: the moon's warm glow deepens, swallows the scrim's bottom
+ * vignette, and arrives at solid #B45309 right as the hero ends — so the two
+ * sections read as one continuous gradient rather than two stacked blocks.
+ *
+ * Sits at z-index 3: above the bloom (0), scrim (1) and embers (2) so it can
+ * cover them, below the hero content (10) so text is never washed over.
+ * Extra mid-stops keep the ramp smooth (a two-stop ramp bands on wide gamuts).
+ */
+.landing-moon__fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  height: 34vh;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(180, 83, 9, 0) 0%,
+    rgba(180, 83, 9, 0.18) 32%,
+    rgba(180, 83, 9, 0.46) 56%,
+    rgba(180, 83, 9, 0.76) 76%,
+    rgba(180, 83, 9, 0.94) 91%,
+    #b45309 100%
+  );
+}
+
+/* ── Hero typography ──────────────────────────────────────────────
+ * Inter is the app's typeface (`--font-sans`, loaded in app/layout.tsx).
+ * These rules name the family explicitly rather than leaning on the
+ * `h1,h2,h3` rule in index.css, and tighten tracking and leading for
+ * display sizes, where Inter's defaults read loose.
+ *
+ * Unlayered, so they outrank both Tailwind's utilities (`@layer
+ * utilities`) and that `@layer base` heading rule.
+ */
+.landing-hero__eyebrow {
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(253, 230, 168, 0.72);
+}
+
+.landing-hero__title {
+  font-family: var(--font-display-hero), var(--font-sans);
+  font-optical-sizing: auto;
+  /* Scaled up ~35% from clamp(2rem, 5vw, 3.1rem) — the old size read small in
+     the hero. Still fluid (vw term) and capped, and the 20ch max-width +
+     balance keep it to a tidy two lines that fit the frame on every width. */
+  font-size: clamp(2.7rem, 6.75vw, 4.2rem);
+  /* Uppercase display face (Bricolage Grotesque) with open tracking + a touch
+     more leading — the old -0.03em tracking read cramped ("shrunk"). */
+  font-weight: 800;
+  line-height: 1.06;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  text-wrap: balance;
+  max-width: 20ch;
+  margin-inline: auto;
+  color: #fff;
+  text-shadow: 0 2px 40px rgba(20, 10, 4, 0.55);
+}
+
+/* ── Headline reveal ──────────────────────────────────────────────
+ * Each word is its own inline-block so it can rise and fade in on a
+ * staggered beat (delays set per-word in the component). The keyframe
+ * starts hidden and below the baseline; `forwards` holds the resting
+ * state so the words stay put after landing. */
+.landing-hero__title--anim .word {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(0.5em);
+  will-change: transform, opacity;
+  animation: hero-word-in 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes hero-word-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5em);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Shared entrance for the eyebrow, lede and chat form — a gentle rise
+ * up into place, sequenced after the headline via per-element delays. */
+.landing-rise {
+  opacity: 0;
+  animation: landing-rise-in 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes landing-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Quick-action pills get a small lift + press so the hero feels alive. */
+.landing-quick {
+  transition:
+    transform 0.18s ease,
+    background-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.landing-quick:hover {
+  transform: translateY(-2px);
+}
+
+.landing-quick:active {
+  transform: translateY(0) scale(0.97);
+}
+
+/* ── Ambient motion graphics ──────────────────────────────────────
+ * Two layers of atmosphere over the burnt-brown moon: soft glow orbs
+ * that drift toward the cursor (parallax via --mx/--my written by the
+ * component), and embers that rise and fade the length of the frame.
+ * All of it is pointer-transparent and sits behind the z-10 content. */
+.landing-fx {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.landing-fx--bloom {
+  z-index: 0;
+}
+
+.landing-fx--embers {
+  z-index: 2;
+}
+
+/* A soft warm highlight sitting on the moon's crest. It drifts toward the
+ * cursor (via --mx/--my written by the component), giving the flat glow a
+ * living sense of depth without a second competing light source. */
+.landing-fx__bloom {
+  position: absolute;
+  left: 50%;
+  top: 57%;
+  width: 72vmax;
+  height: 46vmax;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(247, 184, 96, 0.3),
+    rgba(180, 83, 9, 0.14) 46%,
+    transparent 70%
+  );
+  filter: blur(52px);
+  transform: translate3d(
+    calc(-50% + var(--mx, 0) * 42px),
+    calc(-50% + var(--my, 0) * 30px),
+    0
+  );
+  transition: transform 0.5s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.ember {
+  position: absolute;
+  bottom: -12px;
+  border-radius: 50%;
+  background: #f8b45c;
+  box-shadow:
+    0 0 6px rgba(245, 158, 11, 0.9),
+    0 0 12px rgba(234, 88, 12, 0.6);
+  animation-name: ember-rise;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+@keyframes ember-rise {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 0.8;
+  }
+  100% {
+    transform: translate3d(var(--drift, 0), -100vh, 0) scale(0.4);
+    opacity: 0;
+  }
+}
+
+.landing-hero__lede {
+  font-family: var(--font-sans);
+  margin-inline: auto;
+  /* Nudged up a touch from clamp(0.82rem, 1.7vw, 1.05rem). */
+  font-size: clamp(0.92rem, 1.9vw, 1.2rem);
+  font-weight: 300;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  color: rgba(254, 243, 226, 0.78);
+  white-space: nowrap;
+}
+
+/* On phones the one-line lede would overflow at the larger size, so let it
+   wrap there instead of running off the edge. */
+@media (max-width: 640px) {
+  .landing-hero__lede {
+    white-space: normal;
+  }
+}
+
+/*
+ * Rotating beam locked to the chat box edge.
+ *
+ * The wrapper is only 2px larger than the inner card. A spinning conic
+ * disc sits behind the card; overflow:hidden clips everything outside
+ * the rounded rectangle, so the color travels along the border and
+ * never floats into the page.
+ */
+.chat-beam {
+  --beam-radius: 0.75rem;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--beam-radius);
+  padding: 2px;
+  background: #3f2a18;
+}
+
+.chat-beam__spin {
+  position: absolute;
+  inset: -90%;
+  z-index: 0;
+  pointer-events: none;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0 58%,
+    #7c2d12 68%,
+    #c2410c 74%,
+    #f59e0b 79%,
+    #fde68a 82%,
+    #ea580c 88%,
+    transparent 94%
+  );
+  animation: chat-beam-spin 3s linear infinite;
+}
+
+.chat-beam__body {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  border-radius: calc(var(--beam-radius) - 2px);
+  background: #120c08;
+}
+
+@keyframes chat-beam-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-beam__spin {
+    animation: none;
+    background: linear-gradient(
+      90deg,
+      #7c2d12,
+      #f59e0b,
+      #7c2d12
+    );
+  }
+
+  /* Land every entrance immediately and hold the atmosphere still. */
+  .landing-hero__title--anim .word,
+  .landing-rise {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .landing-fx__bloom {
+    animation: none;
+    transform: translate3d(-50%, -50%, 0);
+    transition: none;
+  }
+
+  .ember {
+    display: none;
+  }
+}
+
+/*
+ * The black-hole hero fills the first viewport, so the bar floats over it
+ * rather than stacking above and pushing the hero below the fold.
  */
 .landing-bar--over {
   position: absolute;
@@ -16,18 +378,82 @@
 }
 
 /*
- * Hero headline: heavy sans instead of the global Georgia serif.
+ * Landing header layout: a 3-column grid — brand (left) · section nav (dead
+ * centre) · CTA (right). The `auto` middle column between two equal `1fr` rails
+ * keeps the nav centred regardless of how wide the brand or button get.
  *
- * This rule is unlayered, so it beats both the `h1,h2,h3` base style in
- * index.css and the component's own `font-bold tracking-tighter` utilities —
- * Tailwind v4 puts utilities in `@layer utilities`, and unlayered author CSS
- * outranks every layer.
+ * Compound selector (`.landing-bar.landing-bar--over`) so it reliably overrides
+ * the base `.landing-bar { display: flex }` from auth.css whatever the import
+ * order.
  */
-.landing h1 {
+.landing-bar.landing-bar--over {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.15rem 6vw 0;
+}
+
+.landing-bar--over > .nav__mark {
+  justify-self: start;
+}
+
+.landing-bar__cta {
+  justify-self: end;
+}
+
+.landing-nav {
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  gap: 1.9rem;
+}
+
+.landing-nav a {
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  font-weight: 300;
+  letter-spacing: 0.04em;
+  color: rgba(254, 243, 226, 0.6);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.18s ease;
+}
+
+.landing-nav a:hover,
+.landing-nav a:focus-visible {
+  color: #fff;
+}
+
+/* Below 860px the centre nav would crowd the brand + button, so drop it and
+   fall back to a two-column brand/CTA bar. */
+@media (max-width: 860px) {
+  .landing-nav {
+    display: none;
+  }
+
+  .landing-bar.landing-bar--over {
+    grid-template-columns: 1fr auto;
+  }
+}
+
+/*
+ * Legacy: styled the two-line "Every long take / hides a hit." headline of
+ * an earlier landing. The live hero is `.landing-hero__title` above.
+ *
+ * There is no Georgia serif to override any more — the global heading font
+ * has been Inter since the neutral-dark overhaul. Kept only because the
+ * rule is unlayered, which is still how a landing headline out-ranks both
+ * the `h1,h2,h3` base style in index.css and Tailwind's utilities
+ * (`@layer utilities`): unlayered author CSS beats every layer.
+ */
+.landing__title {
   font-family: var(--font-ui);
   font-weight: 900;
   letter-spacing: -0.045em;
   line-height: 0.92;
+  font-size: clamp(2.9rem, 7vw, 5.6rem);
+  max-width: 15ch;
 }
 
 /*
@@ -45,6 +471,65 @@
 
 .hero__word > span {
   display: inline-block;
+}
+
+/* ── Black-hole hero ──────────────────────────────────────────────
+ * <BlackHoleHeroSection> fills the first viewport (`.landing__hero`)
+ * with a raw-WebGL black hole. The copy rides above it in
+ * `.landing__hero-inner` (z-10), pinned to the reading edge — left on
+ * desktop, top on phones — where the component's own `scrim` prop has
+ * already darkened the frame, so no CSS wash is needed for legibility.
+ */
+.landing__hero {
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
+.landing__hero-inner {
+  position: relative;
+  z-index: 10;
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1.15rem;
+  max-width: 42rem;
+  padding: 7rem 6vw 5rem;
+  text-align: left;
+}
+
+@media (max-width: 767px) {
+  .landing__hero-inner {
+    justify-content: flex-start;
+    max-width: 100%;
+    padding-top: 6rem;
+  }
+}
+
+.landing__tagline {
+  display: inline-block;
+  padding: 0.42rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-2) 55%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  color: var(--mute);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.landing__lede {
+  max-width: 34rem;
+  color: var(--paper-dim);
+  font-size: clamp(1rem, 2.2vw, 1.18rem);
+  line-height: 1.55;
+}
+
+.landing__cta {
+  margin-top: 0.5rem;
 }
 
 .hero {

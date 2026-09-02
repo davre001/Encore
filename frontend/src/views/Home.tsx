@@ -4,14 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
-import { Check, CircleAlert, Eye, Film, Minus, Target, TrendingUp } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, CircleAlert, Film, Minus, TrendingUp } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import ViewsArea from "@/components/charts/ViewsArea";
+import ViewsBars from "@/components/charts/ViewsBars";
 import VerdictDonut from "@/components/charts/VerdictDonut";
 import Reveal from "@/components/motion/Reveal";
 import CountUp from "@/components/motion/CountUp";
 import { Stagger, StaggerItem } from "@/components/motion/Stagger";
-import { DUR, EASE, hoverLift, springSoft } from "@/lib/motion";
+import { DUR, EASE, springSoft } from "@/lib/motion";
 import { analyticsPosts, analyticsSummary } from "@/lib/mockAnalytics";
 import {
   formatWhen,
@@ -85,42 +85,41 @@ export default function Home() {
     post.views > top.views ? post : top,
   );
 
+  const aboveMedian = analyticsPosts.filter(
+    (post) => post.views >= summary.median,
+  ).length;
+  const aboveShare = Math.round((aboveMedian / summary.posts) * 100);
+
   const cards = [
     {
-      label: "Views",
+      label: "Total views",
       value: summary.totalViews,
       suffix: "",
-      meta: `${summary.posts} posts this week`,
-      tone: "",
-      Icon: Eye,
-      badge: "is-slate",
+      delta: { dir: null, text: `${summary.posts} posts this week` },
     },
     {
       label: "Hit rate",
       value: Math.round(summary.hitRate * 100),
       suffix: "%",
-      meta: `${summary.hits} hits · ${summary.flops} flops`,
-      tone: summary.hitRate >= 0.5 ? "is-up" : "is-down",
-      Icon: TrendingUp,
-      badge: "is-green",
+      delta: {
+        dir: summary.hitRate >= 0.5 ? "up" : "down",
+        text: `${summary.hits} hits · ${summary.flops} flops`,
+      },
     },
     {
-      label: "Median",
+      label: "Median views",
       value: summary.median,
       suffix: "",
-      meta: `Best post ran ${(best.views / summary.median).toFixed(1)}× it`,
-      tone: "is-up",
-      Icon: Target,
-      badge: "is-violet",
+      delta: {
+        dir: "up",
+        text: `Best ran ${(best.views / summary.median).toFixed(1)}× median`,
+      },
     },
     {
       label: "Tapes",
       value: projects.length,
       suffix: "",
-      meta: "In history",
-      tone: "",
-      Icon: Film,
-      badge: "is-amber",
+      delta: { dir: null, text: "In history" },
     },
   ];
 
@@ -141,24 +140,24 @@ export default function Home() {
         </Link>
       </Reveal>
 
-      <Stagger className="dash__kpis" stagger={0.07}>
+      <Stagger className="kpis" stagger={0.07}>
         {cards.map((card) => (
-          <StaggerItem
-            as="article"
-            key={card.label}
-            className="metric"
-            whileHover={hoverLift}
-          >
-            <div className="metric__row">
-              <span className="metric__label">{card.label}</span>
-              <span className={`metric__badge ${card.badge}`} aria-hidden="true">
-                <card.Icon />
-              </span>
-            </div>
-            <div className="metric__value">
+          <StaggerItem as="article" key={card.label} className="kpis__cell">
+            <span className="kpis__label">{card.label}</span>
+            <div className="kpis__value">
               <CountUp value={card.value} suffix={card.suffix} />
             </div>
-            <div className={`metric__meta ${card.tone}`}>{card.meta}</div>
+            <div
+              className={`kpis__delta${
+                card.delta.dir ? ` is-${card.delta.dir}` : ""
+              }`}
+            >
+              {card.delta.dir === "up" ? <ChevronUp aria-hidden="true" /> : null}
+              {card.delta.dir === "down" ? (
+                <ChevronDown aria-hidden="true" />
+              ) : null}
+              <span>{card.delta.text}</span>
+            </div>
           </StaggerItem>
         ))}
       </Stagger>
@@ -166,19 +165,40 @@ export default function Home() {
       <div className="dash__row dash__row--wide">
         <section className="panel">
           <div className="panel__head">
-            <h2 className="panel__title">Views this week</h2>
+            <div className="panel__heading">
+              <div className="panel__titlerow">
+                <h2 className="panel__title">Views this week</h2>
+                <span className="trend trend--up">
+                  <TrendingUp aria-hidden="true" /> {aboveShare}%
+                </span>
+              </div>
+              <p className="panel__sub">
+                Daily views across your last 7 posts, against your median.
+              </p>
+            </div>
             <Link href="/analytics" className="panel__meta">
               Full analytics
             </Link>
           </div>
           <div className="well">
-            <ViewsArea posts={analyticsPosts} median={summary.median} />
+            <ViewsBars posts={analyticsPosts} median={summary.median} />
           </div>
         </section>
 
         <section className="panel">
           <div className="panel__head">
-            <h2 className="panel__title">Verdict split</h2>
+            <div className="panel__heading">
+              <div className="panel__titlerow">
+                <h2 className="panel__title">Verdict split</h2>
+                <span className="trend trend--up">
+                  <TrendingUp aria-hidden="true" />{" "}
+                  {Math.round(summary.hitRate * 100)}%
+                </span>
+              </div>
+              <p className="panel__sub">
+                Hits, mids, and flops across the week.
+              </p>
+            </div>
             <Link href="/analytics" className="panel__meta">
               View all
             </Link>

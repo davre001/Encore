@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import Reveal from "@/components/motion/Reveal";
 import { Stagger, StaggerItem } from "@/components/motion/Stagger";
+import { useReducedMotionSafe } from "@/components/motion/useReducedMotionSafe";
 import { DUR, EASE } from "@/lib/motion";
 import { formatWhen, loadProjects, saveProjects, type Project } from "@/lib/mockProjects";
 import {
@@ -37,6 +38,18 @@ type Filter = "all" | "posted" | "draft" | "leftover" | "flop";
 const FILTERS: Filter[] = ["all", "posted", "flop", "draft", "leftover"];
 const SORTS: SortKey[] = ["recent", "views", "worst"];
 
+/* Placeholder rows for the pre-load skeleton. Fixed, varied widths (no
+   randomness — `Math.random` is unavailable in this render path anyway) so the
+   list carries weight from the first paint rather than flashing the sparse
+   empty-state panel while `loadProjects()` runs in a post-mount effect. */
+const SKELETON_ROWS = [
+  { name: "46%", meta: "30%" },
+  { name: "38%", meta: "26%" },
+  { name: "52%", meta: "34%" },
+  { name: "34%", meta: "22%" },
+  { name: "44%", meta: "28%" },
+];
+
 const VERDICT_ICON = {
   hit: Check,
   mid: Minus,
@@ -51,6 +64,7 @@ function matches(item: HistoryItem, filter: Filter) {
 
 export default function History() {
   const router = useRouter();
+  const reduced = useReducedMotionSafe();
   const [projects, setProjects] = useState<Project[]>([]);
   const [overrides, setOverrides] = useState<HistoryOverrides>(emptyOverrides);
   const [filter, setFilter] = useState<Filter>("all");
@@ -59,10 +73,12 @@ export default function History() {
   const [menuId, setMenuId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     setProjects(loadProjects());
     setOverrides(loadOverrides());
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -161,7 +177,12 @@ export default function History() {
         </Link>
       </Reveal>
 
-      <div className="hist__bar">
+      <motion.div
+        className="hist__bar"
+        initial={reduced ? false : { opacity: 0, y: 14 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: DUR.base, ease: EASE, delay: 0.1 }}
+      >
         <div className="hist__filters" role="tablist" aria-label="Filter history">
           {FILTERS.map((key) => (
             <button
@@ -188,9 +209,27 @@ export default function History() {
             ))}
           </select>
         </label>
-      </div>
+      </motion.div>
 
-      {shown.length === 0 ? (
+      {!loaded ? (
+        <div className="hist__list" aria-hidden="true">
+          {SKELETON_ROWS.map((row, index) => (
+            <div key={index} className="hist__item hist__item--skeleton">
+              <div className="hist__row">
+                <span className="skeleton skeleton--icon" />
+                <div className="row__body">
+                  <span className="skeleton skeleton--line" style={{ width: row.name }} />
+                  <span
+                    className="skeleton skeleton--line skeleton--sm"
+                    style={{ width: row.meta }}
+                  />
+                </div>
+                <span className="skeleton skeleton--pill" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : shown.length === 0 ? (
         <section className="panel">
           <p className="panel__empty">
             Nothing here yet. Drop a long take in the editor and it will show up.

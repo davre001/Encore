@@ -16,10 +16,20 @@ type LayoutProps = {
  */
 const BARE_ROUTES = new Set(["/", "/signin", "/signup"]);
 
+/*
+ * Signed-in but full-screen: the cut room is its own workspace and takes over
+ * the whole window like a desktop editor, so the app sidebar is hidden here.
+ */
+const FULLSCREEN_ROUTES = new Set(["/editor"]);
+
 export default function Layout({ children }: LayoutProps) {
   const { user, ready } = useAuth();
   const pathname = usePathname();
-  const showChrome = ready && Boolean(user) && !BARE_ROUTES.has(pathname);
+  const showChrome =
+    ready &&
+    Boolean(user) &&
+    !BARE_ROUTES.has(pathname) &&
+    !FULLSCREEN_ROUTES.has(pathname);
 
   return (
     /*

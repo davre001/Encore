@@ -34,10 +34,25 @@
   font-size: 0.92rem;
 }
 
-.dash__kpis {
+/* KPI strip: one bordered rounded container split into four cells by hairline
+   dividers. The 1px grid gap over a `--line` background paints the dividers in
+   both directions and keeps drawing them correctly when the cells wrap. */
+.kpis {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.9rem;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+.kpis__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 1.25rem 1.35rem 1.4rem;
+  background: var(--bg-2);
 }
 
 .dash__row {
@@ -50,84 +65,91 @@
   grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
 }
 
-/* ---- metric cards ---- */
+/* ---- KPI cells ---- */
 
-.metric {
-  padding: 1.05rem 1.1rem 1.15rem;
-  border: 1px solid var(--line);
-  border-radius: 1rem;
-  background: var(--bg-2);
-}
-
-.metric__row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.metric__label {
+.kpis__label {
   color: var(--mute);
-  font-size: 0.78rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 0.9rem;
 }
 
-.metric__badge {
-  display: grid;
-  place-items: center;
-  width: 2.1rem;
-  height: 2.1rem;
-  border-radius: 0.65rem;
-  flex-shrink: 0;
-}
-
-.metric__badge svg {
-  width: 1.05rem;
-  height: 1.05rem;
-}
-
-.metric__badge.is-slate {
-  background: color-mix(in srgb, var(--paper) 12%, transparent);
-  color: var(--paper);
-}
-
-.metric__badge.is-green {
-  background: color-mix(in srgb, #8fd39a 20%, transparent);
-  color: #8fd39a;
-}
-
-.metric__badge.is-violet {
-  background: color-mix(in srgb, var(--chart-2) 26%, transparent);
-  color: color-mix(in srgb, var(--chart-2) 70%, var(--paper));
-}
-
-.metric__badge.is-amber {
-  background: color-mix(in srgb, var(--ember) 20%, transparent);
-  color: var(--ember);
-}
-
-.metric__value {
-  margin-top: 0.5rem;
+.kpis__value {
   font-family: var(--font-display);
-  font-size: 1.95rem;
+  font-size: 2rem;
   font-weight: 700;
+  line-height: 1;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
 }
 
-.metric__meta {
-  margin-top: 0.3rem;
-  color: var(--paper-dim);
-  font-size: 0.8rem;
+.kpis__delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--mute);
+  font-size: 0.82rem;
 }
 
-.metric__meta.is-up {
-  color: #8fd39a;
+.kpis__delta svg {
+  width: 0.95rem;
+  height: 0.95rem;
 }
 
-.metric__meta.is-down {
-  color: #e0a07a;
+.kpis__delta.is-up {
+  color: var(--good);
+}
+
+.kpis__delta.is-down {
+  color: var(--flop);
+}
+
+/* ---- panel headings: title + inline trend pill + subtitle ---- */
+
+.dash .panel__head {
+  align-items: flex-start;
+}
+
+.panel__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.panel__titlerow {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.panel__sub {
+  color: var(--mute);
+  font-size: 0.82rem;
+}
+
+.trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.trend--up {
+  background: color-mix(in srgb, var(--good) 16%, transparent);
+  color: var(--good);
+}
+
+.trend--down {
+  background: color-mix(in srgb, var(--flop) 16%, transparent);
+  color: var(--flop);
 }
 
 /* ---- nested wells ---- */
@@ -187,8 +209,8 @@
 }
 
 .row__icon.is-hit {
-  background: color-mix(in srgb, #8fd39a 22%, transparent);
-  color: #8fd39a;
+  background: color-mix(in srgb, var(--good) 22%, transparent);
+  color: var(--good);
 }
 
 .row__icon.is-mid {
@@ -197,8 +219,8 @@
 }
 
 .row__icon.is-flop {
-  background: color-mix(in srgb, #e0a07a 22%, transparent);
-  color: #e0a07a;
+  background: color-mix(in srgb, var(--flop) 22%, transparent);
+  color: var(--flop);
 }
 
 .row__body {
@@ -241,8 +263,8 @@
 }
 
 .pill.is-checked {
-  background: color-mix(in srgb, #8fd39a 18%, transparent);
-  color: #8fd39a;
+  background: color-mix(in srgb, var(--good) 18%, transparent);
+  color: var(--good);
 }
 
 .pill.is-posted {
@@ -294,11 +316,50 @@
 }
 
 .chart__dot.is-hit {
-  fill: #8fd39a;
+  fill: var(--good);
 }
 
 .chart__dot.is-flop {
-  fill: #e0a07a;
+  fill: var(--flop);
+}
+
+/* ---- bar chart (ViewsBars) ---- */
+
+.bar {
+  fill: color-mix(in srgb, var(--paper) 55%, transparent);
+}
+
+.bar.is-hit {
+  fill: var(--good);
+}
+
+.bar.is-mid {
+  fill: color-mix(in srgb, var(--paper) 40%, transparent);
+}
+
+.bar.is-flop {
+  fill: var(--flop);
+}
+
+.chart__pill rect {
+  fill: color-mix(in srgb, var(--bg-2) 88%, transparent);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart__pill-label {
+  fill: var(--mute);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chart__pill-value {
+  fill: var(--paper);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .donut {
@@ -335,7 +396,7 @@
 }
 
 .donut__arc.is-hit {
-  stroke: #8fd39a;
+  stroke: var(--good);
 }
 
 .donut__arc.is-mid {
@@ -343,7 +404,7 @@
 }
 
 .donut__arc.is-flop {
-  stroke: #e0a07a;
+  stroke: var(--flop);
 }
 
 .donut__center {
@@ -394,7 +455,7 @@
 }
 
 .donut__swatch.is-hit {
-  background: #8fd39a;
+  background: var(--good);
 }
 
 .donut__swatch.is-mid {
@@ -402,7 +463,7 @@
 }
 
 .donut__swatch.is-flop {
-  background: #e0a07a;
+  background: var(--flop);
 }
 
 .donut__label {
@@ -491,11 +552,11 @@
 }
 
 .history-menu__list button.is-danger {
-  color: #e0a07a;
+  color: var(--flop);
 }
 
 @media (max-width: 1100px) {
-  .dash__kpis {
+  .kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -510,7 +571,7 @@
     padding: 1.2rem 1.1rem 2rem;
   }
 
-  .dash__kpis {
+  .kpis {
     grid-template-columns: minmax(0, 1fr);
   }
 

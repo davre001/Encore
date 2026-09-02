@@ -170,11 +170,11 @@
 
 .side__menu-item.is-danger,
 .side__menu-item.is-danger svg {
-  color: #e0a07a;
+  color: var(--flop);
 }
 
 .side__menu-item.is-danger:hover {
-  background: color-mix(in srgb, #e0a07a 14%, transparent);
+  background: color-mix(in srgb, var(--flop) 14%, transparent);
 }
 
 .side__avatar {

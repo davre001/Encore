@@ -1,12 +1,22 @@
+/*
+ * Full-width, top-aligned page (same shape as the dashboard `.dash`). Dropped
+ * the old `max-width: 52rem` + `margin: auto`, which stranded the whole page as
+ * a narrow centered column; the readable cap now sits on the inner blocks,
+ * pinned to the left reading edge.
+ */
 .settings {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
   width: 100%;
+  padding: 1.6rem 2rem 2.5rem;
+}
+
+.settings__intro,
+.settings__panels,
+.settings__save {
+  width: 100%;
   max-width: 52rem;
-  margin-left: auto;
-  margin-right: auto;
-  padding: 1.25rem 4vw 2.5rem;
 }
 
 .settings__intro h1 {
@@ -127,4 +137,10 @@
 .settings__saved {
   color: var(--mute);
   font-size: 0.85rem;
+}
+
+@media (max-width: 640px) {
+  .settings {
+    padding: 1.2rem 1.1rem 2rem;
+  }
 }
