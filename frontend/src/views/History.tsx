@@ -11,6 +11,7 @@ import {
   Film,
   Lightbulb,
   Minus,
+  Play,
   RotateCcw,
   TriangleAlert,
 } from "lucide-react";
@@ -18,6 +19,7 @@ import Reveal from "@/components/motion/Reveal";
 import { Stagger, StaggerItem } from "@/components/motion/Stagger";
 import { useReducedMotionSafe } from "@/components/motion/useReducedMotionSafe";
 import { DUR, EASE } from "@/lib/motion";
+import * as api from "@/api/client";
 import { formatWhen, loadProjects, saveProjects, type Project } from "@/lib/mockProjects";
 import {
   CATEGORY_LABEL,
@@ -76,9 +78,34 @@ export default function History() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    setProjects(loadProjects());
+    const local = loadProjects();
+    setProjects(local);
     setOverrides(loadOverrides());
     setLoaded(true);
+
+    api
+      .listProjects()
+      .then((backendProjects) => {
+        if (!backendProjects || backendProjects.length === 0) return;
+        const mapped: Project[] = backendProjects.map((bp) => ({
+          id: bp.id,
+          name: bp.name,
+          updatedAt: bp.updatedAt,
+          clips:
+            (bp.clips?.length || 0) +
+            (bp.takeSegments?.length > 1 ? bp.takeSegments.length : 0),
+          status: bp.status,
+          verdict: bp.verdict,
+          views: bp.views,
+          url: bp.postUrl ?? undefined,
+        }));
+        setProjects((prev) => {
+          const ids = new Set(mapped.map((m) => m.id));
+          const rest = prev.filter((p) => !ids.has(p.id));
+          return [...mapped, ...rest];
+        });
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -152,6 +179,7 @@ export default function History() {
     setMenuId(null);
     if (item.category === "draft") {
       persistProjects(projects.filter((project) => project.id !== item.id));
+      api.deleteProject(item.id).catch(() => {});
     } else {
       persistOverrides({
         ...overrides,
@@ -308,6 +336,30 @@ export default function History() {
                     </span>
 
                     <div className="hist__actions">
+                      {item.category === "draft" ? (
+                        <button
+                          type="button"
+                          className="btn btn--primary hist__resume"
+                          onClick={() => router.push(`/editor?project=${item.id}`)}
+                        >
+                          <Play /> Continue
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn--ghost hist__resume"
+                          onClick={() =>
+                            router.push(
+                              item.id.startsWith("proj_")
+                                ? `/editor?project=${item.id}`
+                                : "/editor",
+                            )
+                          }
+                        >
+                          <RotateCcw /> Re-cut
+                        </button>
+                      )}
+
                       <div className="history-menu">
                         <button
                           type="button"

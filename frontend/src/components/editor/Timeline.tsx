@@ -3,12 +3,13 @@
 import {
   useEffect,
   useRef,
+  useState,
   type KeyboardEvent,
   type PointerEvent,
   type WheelEvent,
 } from "react";
 import { ChevronsDownUp, ChevronsUpDown, Snowflake } from "lucide-react";
-import type { Clip } from "@/types";
+import type { Clip, TakeSegment } from "@/types";
 import type { Frame } from "@/lib/mediaGraphics";
 import { formatTime } from "@/lib/timecode";
 
@@ -22,9 +23,12 @@ export const MAX_TL_H = 22;
 type TimelineProps = {
   duration: number;
   time: number;
+  mediaDuration?: number;
   takeName: string | null;
   takeIn: number;
   takeOut: number;
+  takeSegments?: TakeSegment[];
+  selectedTakeId?: string | null;
   clips: Clip[];
   selectedClipId: string | null;
   pxPerSecond: number;
@@ -34,9 +38,19 @@ type TimelineProps = {
   trimPulse: boolean;
   onSeek: (seconds: number) => void;
   onPickClip: (clipId: string) => void;
+  onPickTakeSegment?: (takeId: string) => void;
   onClipContextMenu: (clipId: string, x: number, y: number) => void;
-  onTakeContextMenu: (x: number, y: number) => void;
+  onTakeContextMenu: (takeId: string | null, x: number, y: number) => void;
   onTakeTrim: (nextIn: number, nextOut: number) => void;
+  onTakeSegmentMove?: (takeId: string, nextStart: number, nextEnd: number) => void;
+  onTakeSegmentMoveCommit?: (
+    takeId: string,
+    nextStart: number,
+    nextEnd: number,
+    mode?: "move" | "trim-l" | "trim-r"
+  ) => void;
+  onClipMove?: (clipId: string, nextStart: number, nextEnd: number) => void;
+  onClipMoveCommit?: (clipId: string, nextStart: number, nextEnd: number) => void;
   onPxPerSecond: (value: number) => void;
   onHeightRem: (value: number) => void;
 };
@@ -77,9 +91,12 @@ function clamp(n: number, min: number, max: number) {
 export default function Timeline({
   duration,
   time,
+  mediaDuration,
   takeName,
   takeIn,
   takeOut,
+  takeSegments,
+  selectedTakeId,
   clips,
   selectedClipId,
   pxPerSecond,
@@ -89,9 +106,14 @@ export default function Timeline({
   trimPulse,
   onSeek,
   onPickClip,
+  onPickTakeSegment,
   onClipContextMenu,
   onTakeContextMenu,
   onTakeTrim,
+  onTakeSegmentMove,
+  onTakeSegmentMoveCommit,
+  onClipMove,
+  onClipMoveCommit,
   onPxPerSecond,
   onHeightRem,
 }: TimelineProps) {
@@ -105,6 +127,7 @@ export default function Timeline({
   const resizeOrigin = useRef({ y: 0, h: heightRem });
   const scrubbing = useRef(false);
   const trimming = useRef<null | "l" | "r">(null);
+  const [takeSliding, setTakeSliding] = useState(false);
 
   const widthPx = span > 0 ? Math.max(span * pxPerSecond, 1) : 0;
   const xOf = (seconds: number) => seconds * pxPerSecond;
@@ -145,9 +168,11 @@ export default function Timeline({
   // bars; null when there's no decoded audio so the caller can fall back to the
   // seeded synthetic waveform.
   function peaksBetween(start: number, end: number, count: number): number[] | null {
-    if (!peaks || peaks.length === 0 || span <= 0) return null;
-    const a = clamp(Math.floor((start / span) * peaks.length), 0, peaks.length - 1);
-    const b = clamp(Math.ceil((end / span) * peaks.length), a + 1, peaks.length);
+    if (!peaks || peaks.length === 0) return null;
+    const baseDur = mediaDuration && mediaDuration > 0 ? mediaDuration : span;
+    if (baseDur <= 0) return null;
+    const a = clamp(Math.floor((start / baseDur) * peaks.length), 0, peaks.length - 1);
+    const b = clamp(Math.ceil((end / baseDur) * peaks.length), a + 1, peaks.length);
     const slice = peaks.slice(a, b);
     if (slice.length === 0) return null;
     const out: number[] = [];
@@ -329,6 +354,222 @@ export default function Timeline({
     }
   }
 
+  // Dragging state for take segments (moving left/right or trimming left/right)
+  const [takeDragInfo, setTakeDragInfo] = useState<{
+    takeId: string;
+    start: number;
+    end: number;
+    mode: "move" | "trim-l" | "trim-r";
+  } | null>(null);
+
+  const takeDragRef = useRef<{
+    takeId: string;
+    startX: number;
+    origStart: number;
+    origEnd: number;
+    mode: "move" | "trim-l" | "trim-r";
+    hasMoved: boolean;
+  } | null>(null);
+
+  function onTakePointerDown(
+    seg: TakeSegment,
+    mode: "move" | "trim-l" | "trim-r"
+  ) {
+    return (event: PointerEvent<HTMLElement>) => {
+      if (span <= 0) return;
+      if (event.button !== 0) return; // ignore right-click
+      event.preventDefault();
+      event.stopPropagation();
+
+      takeDragRef.current = {
+        takeId: seg.id,
+        startX: event.clientX,
+        origStart: seg.start,
+        origEnd: seg.end,
+        mode,
+        hasMoved: false,
+      };
+
+      setTakeDragInfo({
+        takeId: seg.id,
+        start: seg.start,
+        end: seg.end,
+        mode,
+      });
+
+      onPickTakeSegment?.(seg.id);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    };
+  }
+
+  function onTakePointerMove(event: PointerEvent<HTMLElement>) {
+    if (!takeDragRef.current) return;
+    const { startX, origStart, origEnd, mode, takeId } = takeDragRef.current;
+    const dx = event.clientX - startX;
+
+    if (Math.abs(dx) > 2) {
+      takeDragRef.current.hasMoved = true;
+    }
+
+    const dt = dx / Math.max(pxPerSecond, 1);
+    const segDur = origEnd - origStart;
+
+    let nextStart = origStart;
+    let nextEnd = origEnd;
+
+    if (mode === "move") {
+      nextStart = clamp(origStart + dt, 0, Math.max(0, span - segDur));
+      nextEnd = nextStart + segDur;
+    } else if (mode === "trim-l") {
+      nextStart = clamp(origStart + dt, 0, origEnd - 0.2);
+      nextEnd = origEnd;
+    } else if (mode === "trim-r") {
+      nextStart = origStart;
+      nextEnd = clamp(origEnd + dt, origStart + 0.2, span);
+    }
+
+    setTakeDragInfo({
+      takeId,
+      start: nextStart,
+      end: nextEnd,
+      mode,
+    });
+
+    onTakeSegmentMove?.(takeId, nextStart, nextEnd);
+  }
+
+  function onTakePointerUp(event: PointerEvent<HTMLElement>) {
+    if (!takeDragRef.current) return;
+    const { hasMoved, takeId } = takeDragRef.current;
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    if (hasMoved && takeDragInfo && takeDragInfo.takeId === takeId) {
+      onTakeSegmentMoveCommit?.(
+        takeId,
+        takeDragInfo.start,
+        takeDragInfo.end,
+        takeDragInfo.mode
+      );
+    } else if (!hasMoved) {
+      const seg = segmentsToRender.find((s) => s.id === takeId);
+      if (seg) onSeek(seg.start);
+    }
+
+    takeDragRef.current = null;
+    setTakeDragInfo(null);
+  }
+
+  // Dragging state for clips (moving left/right or trimming left/right)
+  const [dragInfo, setDragInfo] = useState<{
+    clipId: string;
+    start: number;
+    end: number;
+    mode: "move" | "trim-l" | "trim-r";
+  } | null>(null);
+
+  const clipDragRef = useRef<{
+    clipId: string;
+    startX: number;
+    origStart: number;
+    origEnd: number;
+    mode: "move" | "trim-l" | "trim-r";
+    hasMoved: boolean;
+  } | null>(null);
+
+  function onClipPointerDown(
+    clip: Clip,
+    mode: "move" | "trim-l" | "trim-r"
+  ) {
+    return (event: PointerEvent<HTMLElement>) => {
+      if (span <= 0) return;
+      if (event.button !== 0) return; // ignore right-click
+      event.preventDefault();
+      event.stopPropagation();
+
+      clipDragRef.current = {
+        clipId: clip.id,
+        startX: event.clientX,
+        origStart: clip.start,
+        origEnd: clip.end,
+        mode,
+        hasMoved: false,
+      };
+
+      setDragInfo({
+        clipId: clip.id,
+        start: clip.start,
+        end: clip.end,
+        mode,
+      });
+
+      onPickClip(clip.id);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    };
+  }
+
+  function onClipPointerMove(event: PointerEvent<HTMLElement>) {
+    if (!clipDragRef.current) return;
+    const { startX, origStart, origEnd, mode, clipId } = clipDragRef.current;
+    const dx = event.clientX - startX;
+
+    if (Math.abs(dx) > 2) {
+      clipDragRef.current.hasMoved = true;
+    }
+
+    const dt = dx / Math.max(pxPerSecond, 1);
+    const clipDur = origEnd - origStart;
+
+    let nextStart = origStart;
+    let nextEnd = origEnd;
+
+    if (mode === "move") {
+      // Shift entire clip left/right along the timeline
+      nextStart = clamp(origStart + dt, 0, Math.max(0, span - clipDur));
+      nextEnd = nextStart + clipDur;
+    } else if (mode === "trim-l") {
+      // Trim start (left edge)
+      nextStart = clamp(origStart + dt, 0, origEnd - 0.2);
+      nextEnd = origEnd;
+    } else if (mode === "trim-r") {
+      // Trim end (right edge)
+      nextStart = origStart;
+      nextEnd = clamp(origEnd + dt, origStart + 0.2, span);
+    }
+
+    setDragInfo({
+      clipId,
+      start: nextStart,
+      end: nextEnd,
+      mode,
+    });
+
+    onClipMove?.(clipId, nextStart, nextEnd);
+  }
+
+  function onClipPointerUp(event: PointerEvent<HTMLElement>) {
+    if (!clipDragRef.current) return;
+    const { hasMoved, clipId } = clipDragRef.current;
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    if (hasMoved && dragInfo && dragInfo.clipId === clipId) {
+      onClipMoveCommit?.(clipId, dragInfo.start, dragInfo.end);
+    } else if (!hasMoved) {
+      // Just a click without drag: seek to clip start
+      const clip = clips.find((c) => c.id === clipId);
+      if (clip) onSeek(clip.start);
+    }
+
+    clipDragRef.current = null;
+    setDragInfo(null);
+  }
+
+
   // Keep the playhead in view while playing, without fighting a user pan or scrub.
   useEffect(() => {
     const el = scroller.current;
@@ -350,9 +591,19 @@ export default function Timeline({
 
   const compact = heightRem <= MIN_TL_H + 0.4;
 
-  const takeBox = boxOf(takeIn, Math.min(takeOut || span, span), 1);
-  const takeFrames = framesBetween(takeIn, Math.min(takeOut || span, span));
-  const takeBars = peaksBetween(takeIn, Math.min(takeOut || span, span), 40);
+  const segmentsToRender: TakeSegment[] =
+    takeSegments && takeSegments.length > 0
+      ? takeSegments
+      : takeName && span > 0
+        ? [
+            {
+              id: "take_main",
+              title: takeName,
+              start: takeIn,
+              end: Math.min(takeOut || span, span),
+            },
+          ]
+        : [];
 
   return (
     <div className="cut__timeline" style={{ height: `${heightRem}rem` }}>
@@ -425,77 +676,111 @@ export default function Timeline({
           >
             <div className="cut__track" role="presentation">
               <span className="cut__track-name">Take</span>
-              {takeName && span > 0 ? (
-                <div
-                  className={`cut__block cut__block--take${
-                    trimPulse ? " is-trimming" : ""
-                  }`}
-                  style={{ left: `${takeBox.left}px`, width: `${takeBox.width}px` }}
-                  title={takeName}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onTakeContextMenu(event.clientX, event.clientY);
-                  }}
-                >
-                  {takeFrames ? (
-                    <span className="cut__film cut__film--real" aria-hidden="true">
-                      {takeFrames.map((f, i) => (
-                        <img key={i} src={f.src} alt="" draggable={false} />
-                      ))}
-                    </span>
-                  ) : (
-                    <span className="cut__film" aria-hidden="true" />
-                  )}
-                  {takeBars ? (
-                    <span className="cut__wave" aria-hidden="true">
-                      {takeBars.map((v, i) => (
-                        <span key={i} style={{ height: `${18 + v * 74}%` }} />
-                      ))}
-                    </span>
-                  ) : null}
-                  <span className="cut__block-label">{takeName}</span>
-                  <span
-                    className="cut__trim cut__trim--l"
-                    aria-hidden="true"
-                    onPointerDown={onTrimDown("l")}
-                    onPointerMove={onTrimMove}
-                    onPointerUp={endTrim}
-                    onPointerCancel={endTrim}
-                  />
-                  <span
-                    className="cut__trim cut__trim--r"
-                    aria-hidden="true"
-                    onPointerDown={onTrimDown("r")}
-                    onPointerMove={onTrimMove}
-                    onPointerUp={endTrim}
-                    onPointerCancel={endTrim}
-                  />
-                </div>
-              ) : null}
+              {segmentsToRender.map((seg) => {
+                const isDragging = takeDragInfo?.takeId === seg.id;
+                const activeStart = isDragging ? takeDragInfo.start : seg.start;
+                const activeEnd = isDragging ? takeDragInfo.end : seg.end;
+                const box = boxOf(activeStart, activeEnd, 8);
+                const srcStart = seg.sourceStart !== undefined ? seg.sourceStart : activeStart;
+                const srcEnd = seg.sourceEnd !== undefined ? seg.sourceEnd : activeEnd;
+                const segFrames = framesBetween(srcStart, srcEnd);
+                const segBars = peaksBetween(srcStart, srcEnd, 40);
+                const isSelected = seg.id === selectedTakeId;
+
+                return (
+                  <div
+                    key={seg.id}
+                    role="button"
+                    tabIndex={0}
+                    className={`cut__block cut__block--take${
+                      isSelected ? " is-selected" : ""
+                    }${trimPulse && isSelected ? " is-trimming" : ""}${
+                      isDragging ? " is-sliding is-dragging" : ""
+                    }`}
+                    style={{ left: `${box.left}px`, width: `${box.width}px` }}
+                    title={`${seg.title} (${formatTime(activeStart)} - ${formatTime(activeEnd)})`}
+                    onPointerDown={onTakePointerDown(seg, "move")}
+                    onPointerMove={onTakePointerMove}
+                    onPointerUp={onTakePointerUp}
+                    onPointerCancel={onTakePointerUp}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onPickTakeSegment?.(seg.id);
+                      onTakeContextMenu(seg.id, event.clientX, event.clientY);
+                    }}
+                  >
+                    {segFrames ? (
+                      <span className="cut__film cut__film--real" aria-hidden="true">
+                        {segFrames.map((f, i) => (
+                          <img key={i} src={f.src} alt="" draggable={false} />
+                        ))}
+                      </span>
+                    ) : (
+                      <span className="cut__film" aria-hidden="true" />
+                    )}
+                    {segBars ? (
+                      <span className="cut__wave" aria-hidden="true">
+                        {segBars.map((v, i) => (
+                          <span key={i} style={{ height: `${18 + v * 74}%` }} />
+                        ))}
+                      </span>
+                    ) : null}
+                    <span className="cut__block-label">{seg.title}</span>
+                    {isDragging ? (
+                      <span className="cut__block-time-badge" aria-hidden="true">
+                        {formatTime(activeStart)} - {formatTime(activeEnd)}
+                      </span>
+                    ) : null}
+                    {/* Left Trim handle */}
+                    <span
+                      className="cut__trim cut__trim--l"
+                      aria-label="Trim left edge"
+                      onPointerDown={onTakePointerDown(seg, "trim-l")}
+                      onPointerMove={onTakePointerMove}
+                      onPointerUp={onTakePointerUp}
+                      onPointerCancel={onTakePointerUp}
+                    />
+                    {/* Right Trim handle */}
+                    <span
+                      className="cut__trim cut__trim--r"
+                      aria-label="Trim right edge"
+                      onPointerDown={onTakePointerDown(seg, "trim-r")}
+                      onPointerMove={onTakePointerMove}
+                      onPointerUp={onTakePointerUp}
+                      onPointerCancel={onTakePointerUp}
+                    />
+                  </div>
+                );
+              })}
             </div>
 
             <div className="cut__track cut__track--clips" role="presentation">
               <span className="cut__track-name">Cuts</span>
               {clips.map((clip) => {
-                const box = boxOf(clip.start, clip.end, 8);
-                const clipFrames = framesBetween(clip.start, clip.end);
+                const isDragging = dragInfo?.clipId === clip.id;
+                const activeStart = isDragging ? dragInfo.start : clip.start;
+                const activeEnd = isDragging ? dragInfo.end : clip.end;
+                const box = boxOf(activeStart, activeEnd, 8);
+                const clipFrames = framesBetween(activeStart, activeEnd);
                 const bars =
-                  peaksBetween(clip.start, clip.end, 22) ?? seeded(clip.id, 22);
+                  peaksBetween(activeStart, activeEnd, 22) ?? seeded(clip.id, 22);
                 return (
-                  <button
+                  <div
                     key={clip.id}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     className={`cut__block cut__block--clip${
                       clip.id === selectedClipId ? " is-selected" : ""
-                    }${clip.frozen ? " is-frozen" : ""}`}
+                    }${clip.frozen ? " is-frozen" : ""}${
+                      isDragging ? " is-dragging" : ""
+                    }`}
                     style={{ left: `${box.left}px`, width: `${box.width}px` }}
-                    title={clip.title}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onPickClip(clip.id);
-                      onSeek(clip.start);
-                    }}
+                    title={`${clip.title} (${formatTime(activeStart)} - ${formatTime(activeEnd)})`}
+                    onPointerDown={onClipPointerDown(clip, "move")}
+                    onPointerMove={onClipPointerMove}
+                    onPointerUp={onClipPointerUp}
+                    onPointerCancel={onClipPointerUp}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -518,12 +803,35 @@ export default function Timeline({
                       ))}
                     </span>
                     <span className="cut__block-label">{clip.title}</span>
+                    {isDragging ? (
+                      <span className="cut__block-time-badge" aria-hidden="true">
+                        {formatTime(activeStart)} - {formatTime(activeEnd)}
+                      </span>
+                    ) : null}
                     {clip.frozen ? (
                       <span className="cut__block-frozen" aria-hidden="true">
                         <Snowflake />
                       </span>
                     ) : null}
-                  </button>
+                    {/* Left Trim handle */}
+                    <span
+                      className="cut__trim cut__trim--l"
+                      aria-label="Trim left edge"
+                      onPointerDown={onClipPointerDown(clip, "trim-l")}
+                      onPointerMove={onClipPointerMove}
+                      onPointerUp={onClipPointerUp}
+                      onPointerCancel={onClipPointerUp}
+                    />
+                    {/* Right Trim handle */}
+                    <span
+                      className="cut__trim cut__trim--r"
+                      aria-label="Trim right edge"
+                      onPointerDown={onClipPointerDown(clip, "trim-r")}
+                      onPointerMove={onClipPointerMove}
+                      onPointerUp={onClipPointerUp}
+                      onPointerCancel={onClipPointerUp}
+                    />
+                  </div>
                 );
               })}
             </div>

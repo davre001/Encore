@@ -80,6 +80,13 @@ def main() -> int:
         got = client.get(f"/api/videos/{vid}")
         check("GET /api/videos/{id} 200", got.status_code == 200)
         check("no srcPath leak", "srcPath" not in got.json(), str(got.json().keys()))
+        media = client.get(f"/api/videos/{vid}/file")
+        check("GET /api/videos/{id}/file 200", media.status_code == 200)
+        check(
+            "file is not JSON metadata",
+            "srcPath" not in (media.headers.get("content-type") or ""),
+            media.headers.get("content-type"),
+        )
 
         # 4. moments (background task has run by now) --------------------------
         moments = client.get(f"/api/moments/{vid}").json()
@@ -126,6 +133,34 @@ def main() -> int:
 
         clip_id = clip["id"]
 
+        # 6b. manual clip creation & patch -------------------------------------
+        manual_resp = client.post(
+            "/api/clips",
+            json={
+                "videoId": vid,
+                "start": 5.0,
+                "end": 20.0,
+                "title": "Manual Cut",
+                "caption": "Manual cut caption",
+                "hashtags": ["#manual"],
+                "tags": ["manual"],
+            },
+        )
+        check("POST /api/clips 200", manual_resp.status_code == 200)
+        manual_clip = manual_resp.json()
+        check("manual clip title set", manual_clip.get("title") == "Manual Cut")
+        check("manual clip has camelCase videoId", manual_clip.get("videoId") == vid)
+
+        patch_resp = client.patch(
+            f"/api/clips/{manual_clip['id']}",
+            json={"title": "Updated Manual Cut"},
+        )
+        check("PATCH /api/clips/{id} 200", patch_resp.status_code == 200)
+        check(
+            "patched title reflected",
+            patch_resp.json().get("title") == "Updated Manual Cut",
+        )
+
         # 7. render ------------------------------------------------------------
         rendered = client.post(f"/api/clips/{clip_id}/render")
         check("POST render 200", rendered.status_code == 200)
@@ -143,8 +178,15 @@ def main() -> int:
         post_id = pub["postId"]
 
         # clip is now flagged posted
-        posted_clip = client.get(f"/api/clips/{vid}").json()[0]
+        posted_clip = [c for c in client.get(f"/api/clips/{vid}").json() if c["id"] == clip_id][0]
         check("clip flagged posted", posted_clip.get("posted") is True)
+
+        # 8b. patching posted clip fails with 409
+        conflict_resp = client.patch(
+            f"/api/clips/{clip_id}",
+            json={"title": "Should Fail"},
+        )
+        check("PATCH posted clip returns 409", conflict_resp.status_code == 409)
 
         # 9. check post → hit (the "failed" hook is the breakout) --------------
         checked = client.get(f"/api/posts/{post_id}/check")
@@ -177,6 +219,144 @@ def main() -> int:
             "on the notebook" in str(r_def.get("text", "")),
             str(r_def.get("text")),
         )
+
+        # 11. authentication & database tests ----------------------------------
+        # Weak / generic password rejection
+        weak_resp = client.post(
+            "/api/auth/signup",
+            json={"email": "creator@example.com", "password": "password123"},
+        )
+        check("weak generic password rejected (400)", weak_resp.status_code == 400)
+
+        no_sym_resp = client.post(
+            "/api/auth/signup",
+            json={"email": "creator@example.com", "password": "Password123"},
+        )
+        check("password without symbols rejected (400)", no_sym_resp.status_code == 400)
+
+        # Successful signup with strong password
+        signup_resp = client.post(
+            "/api/auth/signup",
+            json={
+                "email": "creator@example.com",
+                "password": "StrongPassword!123",
+                "name": "Test Creator",
+            },
+        )
+        check("valid signup created (201)", signup_resp.status_code == 201)
+        u = signup_resp.json()
+        check("user has camelCase authProvider", u.get("authProvider") == "local")
+        check("user email matches", u.get("email") == "creator@example.com")
+
+        # Duplicate email prevention (rejects with 409 and descriptive message)
+        dup_resp = client.post(
+            "/api/auth/signup",
+            json={"email": "creator@example.com", "password": "AnotherStrong!456"},
+        )
+        check("duplicate email rejected (409)", dup_resp.status_code == 409)
+        check(
+            "duplicate email gives correct error message",
+            "already exists" in str(dup_resp.json().get("detail", "")).lower(),
+            str(dup_resp.json()),
+        )
+
+        # Signin with wrong password fails
+        bad_signin = client.post(
+            "/api/auth/signin",
+            json={"email": "creator@example.com", "password": "WrongPassword!999"},
+        )
+        check("signin with wrong password fails (401)", bad_signin.status_code == 401)
+
+        # Signin with correct password succeeds
+        good_signin = client.post(
+            "/api/auth/signin",
+            json={"email": "creator@example.com", "password": "StrongPassword!123"},
+        )
+        check("signin with correct password succeeds (200)", good_signin.status_code == 200)
+
+        # Google auth
+        google_resp = client.post(
+            "/api/auth/google",
+            json={
+                "email": "google.creator@gmail.com",
+                "name": "Google Creator",
+                "picture": "https://example.com/avatar.jpg",
+                "sub": "google_12345678",
+            },
+        )
+        check("google auth creates user (200)", google_resp.status_code == 200)
+        g_user = google_resp.json()
+        check("google user has authProvider google", g_user.get("authProvider") == "google")
+
+        # 12. forgot & reset password flow -------------------------------------
+        # Mismatched email confirmation rejected
+        mismatch_resp = client.post(
+            "/api/auth/forgot-password",
+            json={"email": "creator@example.com", "confirmEmail": "other@example.com"},
+        )
+        check("mismatched emails rejected (400)", mismatch_resp.status_code == 400)
+
+        # Non-existent email rejected
+        unknown_resp = client.post(
+            "/api/auth/forgot-password",
+            json={"email": "nobody@example.com", "confirmEmail": "nobody@example.com"},
+        )
+        check("unknown email rejected (404)", unknown_resp.status_code == 404)
+
+        # Successful forgot password request
+        forgot_resp = client.post(
+            "/api/auth/forgot-password",
+            json={"email": "creator@example.com", "confirmEmail": "creator@example.com"},
+        )
+        check("forgot password sends 6-digit code (200)", forgot_resp.status_code == 200)
+
+        # Retrieve generated code from database for testing
+        from app.db import SessionLocal
+        from app.models.user import PasswordReset
+        with SessionLocal() as db_session:
+            reset_record = (
+                db_session.query(PasswordReset)
+                .filter(PasswordReset.email == "creator@example.com", PasswordReset.used == False)
+                .order_by(PasswordReset.created_at.desc())
+                .first()
+            )
+            reset_code = reset_record.code if reset_record else ""
+        check("6-digit code generated", len(reset_code) == 6 and reset_code.isdigit())
+
+        # Reset with invalid code fails
+        bad_code_resp = client.post(
+            "/api/auth/reset-password",
+            json={"email": "creator@example.com", "code": "000000", "newPassword": "BrandNewStrong!123"},
+        )
+        check("invalid code rejected (400)", bad_code_resp.status_code == 400)
+
+        # Reset with weak password fails
+        weak_reset_resp = client.post(
+            "/api/auth/reset-password",
+            json={"email": "creator@example.com", "code": reset_code, "newPassword": "weak"},
+        )
+        check("weak new password rejected (400)", weak_reset_resp.status_code == 400)
+
+        # Successful reset
+        reset_ok = client.post(
+            "/api/auth/reset-password",
+            json={"email": "creator@example.com", "code": reset_code, "newPassword": "BrandNewStrong!123"},
+        )
+        check("reset password succeeds (200)", reset_ok.status_code == 200)
+
+        # Signin with old password fails
+        old_signin = client.post(
+            "/api/auth/signin",
+            json={"email": "creator@example.com", "password": "StrongPassword!123"},
+        )
+        check("old password invalid after reset (401)", old_signin.status_code == 401)
+
+        # Signin with new password succeeds
+        new_signin = client.post(
+            "/api/auth/signin",
+            json={"email": "creator@example.com", "password": "BrandNewStrong!123"},
+        )
+        check("new password login succeeds (200)", new_signin.status_code == 200)
 
     print()
     if FAILS:

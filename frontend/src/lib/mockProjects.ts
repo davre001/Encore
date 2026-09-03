@@ -6,6 +6,10 @@ export type Project = {
   updatedAt: number;
   clips: number;
   status: ProjectStatus;
+  /** Set once the project's cut has been posted & checked. */
+  verdict?: "hit" | "mid" | "flop";
+  views?: number;
+  url?: string;
 };
 
 const STORAGE_KEY = "encore.projects";

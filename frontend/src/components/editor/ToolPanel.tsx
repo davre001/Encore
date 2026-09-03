@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState, type DragEvent, type FormEvent } from "react";
-import { ArrowUp, Upload } from "lucide-react";
-import type { Clip, Message, Video } from "@/types";
+import { type FormEvent } from "react";
+import { ArrowUp } from "lucide-react";
+import type { Clip, Message, Moment, Video } from "@/types";
 import type { ToolId } from "@/components/editor/ToolRail";
 import { formatSpan, formatTime } from "@/lib/timecode";
 
@@ -10,23 +10,26 @@ type ToolPanelProps = {
   tool: ToolId;
   video: Video | null;
   busy: boolean;
+  moments: Moment[];
   clips: Clip[];
   messages: Message[];
   selectedClipId: string | null;
   prompt: string;
   onPrompt: (value: string) => void;
   onSend: (text: string) => void;
-  onUpload: (file: File) => void;
   onReset: () => void;
   onPickClip: (id: string) => void;
   onClipChange: (clip: Clip) => void;
   onClipContext: (id: string, x: number, y: number) => void;
   onSeek: (seconds: number) => void;
   onRecut: (id: string) => void;
+  onDecideMoment: (id: string, decision: "accept" | "reject") => void;
+  onToolChange?: (tool: ToolId) => void;
 };
 
 const HEADINGS: Record<ToolId, string> = {
   take: "Take",
+  moments: "Moments",
   cuts: "Cuts",
   caption: "Caption",
   mind: "Mind",
@@ -34,23 +37,16 @@ const HEADINGS: Record<ToolId, string> = {
 
 export default function ToolPanel(props: ToolPanelProps) {
   const { tool, video, busy, clips, selectedClipId } = props;
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [drag, setDrag] = useState(false);
-
-  function takeFile(file: File | undefined) {
-    if (!file || !file.type.startsWith("video/")) return;
-    props.onUpload(file);
-  }
-
-  function onDrop(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault();
-    setDrag(false);
-    takeFile(event.dataTransfer.files?.[0]);
-  }
 
   const selectedClip = clips.find((clip) => clip.id === selectedClipId) ?? null;
 
-  const count = tool === "cuts" ? clips.length : undefined;
+  const pendingMoments = props.moments.filter((m) => m.status === "pending");
+  const count =
+    tool === "cuts"
+      ? clips.length
+      : tool === "moments"
+        ? (pendingMoments.length > 0 ? pendingMoments.length : props.moments.length)
+        : undefined;
 
   return (
     <section className="cut__panel" aria-label={`${HEADINGS[tool]} panel`}>
@@ -62,57 +58,118 @@ export default function ToolPanel(props: ToolPanelProps) {
       <div className="cut__panel-body">
         {/* ---- Take: the source long video ---- */}
         {tool === "take" ? (
-          <>
-            <div
-              className={drag ? "cut__drop is-drag" : "cut__drop"}
-              onDragOver={(event) => {
-                event.preventDefault();
-                setDrag(true);
-              }}
-              onDragLeave={() => setDrag(false)}
-              onDrop={onDrop}
-            >
-              <button
-                type="button"
-                className="cut__upload"
-                onClick={() => fileRef.current?.click()}
-                disabled={busy}
-              >
-                <span className="cut__upload-icon" aria-hidden="true">
-                  <Upload />
-                </span>
-                <strong>Upload a video</strong>
-                <span className="cut__upload-sub">
-                  Click or drop your long take here
-                </span>
-              </button>
-              <input
-                ref={fileRef}
-                className="cut__file"
-                type="file"
-                accept="video/*"
-                onChange={(event) => takeFile(event.target.files?.[0])}
-              />
+          video ? (
+            <div className="cut__row">
+              <div className="cut__row-top">
+                <span className="cut__row-label">{video.name}</span>
+              </div>
+              <span className="cut__time">{formatTime(video.duration)}</span>
+              <div className="cut__row-actions">
+                <button
+                  type="button"
+                  className="cut__mini"
+                  onClick={props.onReset}
+                >
+                  Clear take
+                </button>
+              </div>
             </div>
+          ) : (
+            <p className="cut__hint">
+              Drop a long take on the monitor to begin.
+            </p>
+          )
+        ) : null}
 
-            {video ? (
-              <div className="cut__row">
-                <div className="cut__row-top">
-                  <span className="cut__row-label">{video.name}</span>
-                </div>
-                <span className="cut__time">{formatTime(video.duration)}</span>
-                <div className="cut__row-actions">
+        {/* ---- Moments: standout beats proposed by Encore ---- */}
+        {tool === "moments" ? (
+          busy ? (
+            <p className="cut__hint">Watching the tape and proposing standalone moments…</p>
+          ) : props.moments.length === 0 ? (
+            <p className="cut__hint">
+              {video
+                ? "No moments detected yet. As transcription and detection finish, proposed beats will appear here."
+                : "Upload a long take first. Encore will find the beats that stand alone."}
+            </p>
+          ) : (
+            <>
+              <p className="cut__hint" style={{ marginBottom: "0.2rem" }}>
+                Review each beat. Keep it to turn it into a cut with captions, or Skip.
+              </p>
+              {props.moments.map((moment) => (
+                <div
+                  key={moment.id}
+                  className={`cut__row${moment.status === "rejected" ? " is-rejected" : ""}`}
+                >
+                  <div className="cut__row-top">
+                    <span className="cut__time">
+                      {formatSpan(moment.start, moment.end)}
+                    </span>
+                    <span
+                      className={`cut__badge cut__badge--${moment.status}`}
+                      style={{
+                        color:
+                          moment.status === "accepted"
+                            ? "var(--good)"
+                            : moment.status === "rejected"
+                              ? "var(--flop)"
+                              : "var(--cut-copper)",
+                      }}
+                    >
+                      {moment.status === "accepted"
+                        ? "Kept"
+                        : moment.status === "rejected"
+                          ? "Skipped"
+                          : "Pending"}
+                    </span>
+                  </div>
                   <button
                     type="button"
-                    className="cut__mini"
-                    onClick={props.onReset}
+                    className="cut__row-label"
+                    style={{
+                      border: 0,
+                      background: "none",
+                      color: "inherit",
+                      textAlign: "left",
+                      padding: 0,
+                      cursor: "pointer",
+                    }}
+                    onClick={() => props.onSeek(moment.start)}
                   >
-                    Clear take
+                    {moment.label}
                   </button>
+                  <p className="cut__row-note">{moment.reason}</p>
+                  <div className="cut__row-actions">
+                    {moment.status === "pending" ? (
+                      <>
+                        <button
+                          type="button"
+                          className="cut__mini cut__mini--keep"
+                          onClick={() => props.onDecideMoment(moment.id, "accept")}
+                        >
+                          Keep
+                        </button>
+                        <button
+                          type="button"
+                          className="cut__mini"
+                          style={{ color: "var(--flop)" }}
+                          onClick={() => props.onDecideMoment(moment.id, "reject")}
+                        >
+                          Skip
+                        </button>
+                      </>
+                    ) : (
+                      <span className="cut__row-note" style={{ fontStyle: "italic" }}>
+                        {moment.status === "accepted"
+                          ? "Cut created in Cuts"
+                          : "Skipped from cuts"}
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ) : null}
-          </>
+              ))}
+            </>
+          )
         ) : null}
 
         {/* ---- Cuts: the cuts Encore made from the beats it found ---- */}
@@ -120,7 +177,26 @@ export default function ToolPanel(props: ToolPanelProps) {
           busy ? (
             <p className="cut__hint">Reading the tape and cutting the beats…</p>
           ) : clips.length === 0 ? (
-            <p className="cut__hint">Nothing to show yet</p>
+            pendingMoments.length > 0 ? (
+              <div className="cut__hint" style={{ display: "grid", gap: "0.5rem" }}>
+                <p>
+                  You have {pendingMoments.length} proposed moment
+                  {pendingMoments.length > 1 ? "s" : ""} waiting for review.
+                </p>
+                {props.onToolChange ? (
+                  <button
+                    type="button"
+                    className="cut__mini cut__mini--keep"
+                    style={{ padding: "0.4rem 0.6rem" }}
+                    onClick={() => props.onToolChange?.("moments")}
+                  >
+                    Review Moments
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <p className="cut__hint">Nothing to show yet</p>
+            )
           ) : (
             clips.map((clip) => (
               <div

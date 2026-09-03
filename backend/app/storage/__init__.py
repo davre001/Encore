@@ -206,3 +206,34 @@ def read_playbook() -> list[dict]:
 def write_playbook(rows: list[dict]) -> None:
     with _LOCK:
         _write("playbook", rows)
+
+
+# --- projects (history & auto-save) ----------------------------------------
+def save_project(project: dict) -> dict:
+    return _insert("projects", project)
+
+
+def get_project(project_id: str) -> Optional[dict]:
+    return _get("projects", project_id)
+
+
+def list_projects() -> list[dict]:
+    with _LOCK:
+        rows = _read("projects")
+        # Return sorted by updatedAt descending (most recent first)
+        return sorted(rows, key=lambda r: r.get("updatedAt", 0), reverse=True)
+
+
+def update_project(project_id: str, patch: dict) -> Optional[dict]:
+    return _update("projects", project_id, patch)
+
+
+def delete_project(project_id: str) -> bool:
+    with _LOCK:
+        rows = _read("projects")
+        new_rows = [r for r in rows if r.get("id") != project_id]
+        if len(new_rows) != len(rows):
+            _write("projects", new_rows)
+            return True
+        return False
+

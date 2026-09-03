@@ -214,7 +214,7 @@ The real path is verified too: a genuine H.264+AAC upload runs through real `ffp
 - [x] Full frontend UI (landing, auth, cut-room editor, analytics, history, profile, settings) on mock data
 - [x] Full backend pipeline, capability-gated with a deterministic fallback
 - [x] Verified: 39/39 smoke test + real ffmpeg/Whisper end-to-end run
-- [ ] Wire `frontend/src/api/client.ts` to the live backend (shapes already match)
+- [x] Wire `frontend/src/api/client.ts` to the live backend (shapes already match)
 - [ ] Supply Minds + YouTube credentials to light up the agent and real publishing
 
 ---

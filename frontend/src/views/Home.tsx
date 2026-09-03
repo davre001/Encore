@@ -13,6 +13,7 @@ import CountUp from "@/components/motion/CountUp";
 import { Stagger, StaggerItem } from "@/components/motion/Stagger";
 import { DUR, EASE, springSoft } from "@/lib/motion";
 import { analyticsPosts, analyticsSummary } from "@/lib/mockAnalytics";
+import * as api from "@/api/client";
 import {
   formatWhen,
   loadProjects,
@@ -57,6 +58,28 @@ export default function Home() {
   useEffect(() => {
     setProjects(loadProjects());
     const tick = window.setInterval(() => setNow(new Date()), 60_000);
+
+    api
+      .listProjects()
+      .then((backendProjects) => {
+        if (!backendProjects || backendProjects.length === 0) return;
+        const mapped: Project[] = backendProjects.map((bp) => ({
+          id: bp.id,
+          name: bp.name,
+          updatedAt: bp.updatedAt,
+          clips:
+            (bp.clips?.length || 0) +
+            (bp.takeSegments?.length > 1 ? bp.takeSegments.length : 0),
+          status: bp.status,
+        }));
+        setProjects((prev) => {
+          const ids = new Set(mapped.map((m) => m.id));
+          const rest = prev.filter((p) => !ids.has(p.id));
+          return [...mapped, ...rest];
+        });
+      })
+      .catch(() => {});
+
     return () => window.clearInterval(tick);
   }, []);
 
@@ -389,6 +412,7 @@ export default function Home() {
 
   function removeProject(id: string) {
     persist(projects.filter((project) => project.id !== id));
+    api.deleteProject(id).catch(() => {});
     if (renamingId === id) setRenamingId(null);
   }
 }

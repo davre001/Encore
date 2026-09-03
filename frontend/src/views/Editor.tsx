@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -20,28 +21,29 @@ import TransportBar, {
 import ClipContextMenu, {
   type ClipMenuAction,
 } from "@/components/editor/ClipContextMenu";
-import type { Clip, Message, Moment, PostCheck, Video } from "@/types";
+import type { Clip, Message, Moment, PostCheck, TakeSegment, Video } from "@/types";
 import { WORKFLOW_STEPS, workflowIndex } from "@/lib/studioAssets";
-import {
-  buildClipFromMoment,
-  buildMoments,
-  buildPostCheck,
-  buildVideo,
-  mindMessage,
-  youMessage,
-} from "@/lib/mockEditor";
+import * as api from "@/api/client";
 import { extractFrames, extractPeaks, type Frame } from "@/lib/mediaGraphics";
+import { formatTime } from "@/lib/timecode";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Local id source — mockEditor keeps its own id() private, and the clip ops
-// here (split / duplicate / paste) all need fresh, collision-free ids.
+// Local id source — generates fresh, collision-free ids.
 let idSeq = 0;
 function uid(prefix: string) {
   idSeq += 1;
   return `${prefix}_${Date.now().toString(36)}_${idSeq}`;
+}
+
+function mindMessage(text: string): Message {
+  return { id: uid("msg"), role: "mind", text, createdAt: Date.now() };
+}
+
+function youMessage(text: string): Message {
+  return { id: uid("msg"), role: "you", text, createdAt: Date.now() };
 }
 
 function stampNow() {
@@ -106,6 +108,19 @@ function stem(name: string) {
   return name.replace(/\.[^/.]+$/, "") || name;
 }
 
+function persistableMediaUrl(videoId: string | null | undefined, mediaUrl: string | null) {
+  if (videoId) return api.videoFileUrl(videoId);
+  if (mediaUrl && !mediaUrl.startsWith("blob:")) return mediaUrl;
+  return null;
+}
+
+function initialProjectName() {
+  if (typeof window === "undefined") return "Untitled";
+  return new URLSearchParams(window.location.search).get("project")
+    ? "Opening…"
+    : "Untitled";
+}
+
 /**
  * Read a file's real duration off a throwaway <video>, so the timeline can lay
  * the take and its cuts out at true time. Resolves 0 (→ the caller falls back
@@ -148,6 +163,10 @@ export default function Editor() {
   const [busy, setBusy] = useState(false);
   const [moments, setMoments] = useState<Moment[]>([]);
   const [clips, setClips] = useState<Clip[]>([]);
+  // Ids the backend knows about (from decide→listClips, or created at publish).
+  // Anything not in here is a local-only cut that must be created before it can
+  // be posted; anything in here gets its edits PATCHed at publish time.
+  const serverClipIds = useRef<Set<string>>(new Set<string>());
   const [checks, setChecks] = useState<PostCheck[]>([]);
   const [messages, setMessages] = useState<Message[]>([
     mindMessage(
@@ -168,8 +187,10 @@ export default function Editor() {
   const [future, setFuture] = useState<Clip[][]>([]);
   const [menu, setMenu] = useState<MenuState | null>(null);
 
-  // Take-level edit state: the main clip's trimmed in/out plus a one-shot pulse
-  // that flags the trim handles when the user picks Trim from a menu.
+  // Take-level edit state: multiple take segments (from splitting the main clip),
+  // trimmed in/out, plus a pulse that flags trim handles.
+  const [takeSegments, setTakeSegments] = useState<TakeSegment[]>([]);
+  const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
   const [takeIn, setTakeIn] = useState(0);
   const [takeOut, setTakeOut] = useState(0);
   const [trimPulse, setTrimPulse] = useState(false);
@@ -194,7 +215,7 @@ export default function Editor() {
   const [peaks, setPeaks] = useState<number[] | null>(null);
 
   const [exporting, setExporting] = useState<ExportTarget | null>(null);
-  const [projectName, setProjectName] = useState("Untitled");
+  const [projectName, setProjectName] = useState(initialProjectName);
   const [renaming, setRenaming] = useState(false);
   const [aspect, setAspect] = useState("16:9");
   const [pxPerSecond, setPxPerSecond] = useState(12);
@@ -205,6 +226,179 @@ export default function Editor() {
   const stageFileRef = useRef<HTMLInputElement>(null);
   const [stageDrag, setStageDrag] = useState(false);
 
+  // Project persistence and auto-save
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const isInitialLoad = useRef(true);
+  const resumePlayhead = useRef<number | null>(null);
+  // Posted/verdict state persisted onto the project so History can tell a draft
+  // apart from a posted hit / mid / flop and resume the right one.
+  const [projectStatus, setProjectStatus] =
+    useState<"draft" | "posted" | "checked">("draft");
+  const [projectVerdict, setProjectVerdict] =
+    useState<"hit" | "mid" | "flop" | null>(null);
+  const [projectViews, setProjectViews] = useState<number | null>(null);
+  const [projectPostUrl, setProjectPostUrl] = useState<string | null>(null);
+  const [projectPostId, setProjectPostId] = useState<string | null>(null);
+
+  // Load project from backend if project ID in URL query param
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const qProject = params.get("project");
+    if (!qProject) {
+      isInitialLoad.current = false;
+      return;
+    }
+
+    let mounted = true;
+    api
+      .getProject(qProject)
+      .then((proj) => {
+        if (!mounted || !proj) return;
+        setProjectId(proj.id);
+        setProjectName(proj.name || "Untitled");
+        if (proj.takeIn !== undefined) setTakeIn(proj.takeIn);
+        if (proj.takeOut !== undefined) setTakeOut(proj.takeOut);
+        if (proj.takeSegments && proj.takeSegments.length > 0) {
+          setTakeSegments(proj.takeSegments);
+          setSelectedTakeId(proj.takeSegments[0].id);
+        }
+        if (proj.clips && proj.clips.length > 0) {
+          setClips(proj.clips);
+          setSelectedClipId(proj.clips[0].id);
+        }
+        if (proj.effects) {
+          if (proj.effects.rotate !== undefined) setPreviewRotate(proj.effects.rotate);
+          if (proj.effects.flip !== undefined) setPreviewFlip(proj.effects.flip);
+          if (proj.effects.aspect) setAspect(proj.effects.aspect);
+          if (proj.effects.aiOn !== undefined) setAiOn(proj.effects.aiOn);
+          if (proj.effects.compareOn !== undefined) setCompareOn(proj.effects.compareOn);
+        }
+        // Restore posted/verdict state so a resumed posted project stays posted.
+        if (proj.status) setProjectStatus(proj.status);
+        if (proj.verdict) setProjectVerdict(proj.verdict);
+        if (proj.views !== undefined && proj.views !== null) setProjectViews(proj.views);
+        if (proj.postUrl) setProjectPostUrl(proj.postUrl);
+        if (proj.postId) setProjectPostId(proj.postId);
+        if (typeof proj.playhead === "number" && proj.playhead > 0) {
+          resumePlayhead.current = proj.playhead;
+          setTime(proj.playhead);
+        }
+        if (proj.videoId) {
+          setMediaUrl(api.videoFileUrl(proj.videoId));
+          setVideo({
+            id: proj.videoId,
+            name: proj.name || "take",
+            duration: proj.takeOut || 0,
+            createdAt: proj.createdAt,
+          });
+          api
+            .getVideo(proj.videoId)
+            .then((v) => {
+              if (mounted && v) setVideo(v);
+            })
+            .catch(() => {});
+          api
+            .listMoments(proj.videoId)
+            .then((found) => {
+              if (mounted && found) setMoments(found);
+            })
+            .catch(() => {});
+        }
+        setSaveStatus("saved");
+      })
+      .catch((err) => {
+        console.warn("Could not load project:", err);
+        setProjectName("Untitled");
+      })
+      .finally(() => {
+        if (mounted) {
+          window.setTimeout(() => {
+            isInitialLoad.current = false;
+          }, 600);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Auto-save project whenever take segments, clips, or effect options change
+  useEffect(() => {
+    if (isInitialLoad.current) return;
+    // Don't auto-save an empty, untouched canvas before any upload or clips exist
+    if (!video && clips.length === 0 && takeSegments.length === 0 && !mediaUrl) {
+      return;
+    }
+
+    setSaveStatus("saving");
+    const timer = window.setTimeout(async () => {
+      try {
+        const payload = {
+          id: projectId || undefined,
+          name: projectName || "Untitled Take",
+          videoId: video?.id || null,
+          mediaUrl: persistableMediaUrl(video?.id, mediaUrl),
+          playhead: time,
+          status: projectStatus,
+          verdict: projectVerdict ?? undefined,
+          views: projectViews ?? undefined,
+          postUrl: projectPostUrl ?? undefined,
+          postId: projectPostId ?? undefined,
+          takeIn,
+          takeOut,
+          takeSegments,
+          clips,
+          effects: {
+            rotate: previewRotate,
+            flip: previewFlip,
+            aspect,
+            aiOn,
+            compareOn,
+          },
+        };
+
+        const res = await api.saveProject(payload);
+        if (res && res.id && res.id !== projectId) {
+          setProjectId(res.id);
+          // Update URL without full reload so refresh preserves the project
+          if (typeof window !== "undefined") {
+            const url = new URL(window.location.href);
+            url.searchParams.set("project", res.id);
+            window.history.replaceState({}, "", url.toString());
+          }
+        }
+        setSaveStatus("saved");
+      } catch (err) {
+        console.warn("Auto-save failed:", err);
+        setSaveStatus("idle");
+      }
+    }, 900);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    projectId,
+    projectName,
+    takeIn,
+    takeOut,
+    takeSegments,
+    clips,
+    previewRotate,
+    previewFlip,
+    aspect,
+    aiOn,
+    compareOn,
+    video,
+    mediaUrl,
+    projectStatus,
+    projectVerdict,
+    projectViews,
+    projectPostUrl,
+    projectPostId,
+  ]);
+
   useEffect(() => {
     setStamp(stampNow());
     const tick = window.setInterval(() => setStamp(stampNow()), 30_000);
@@ -213,9 +407,20 @@ export default function Editor() {
 
   // Release the blob when it is swapped out or the editor unmounts.
   useEffect(() => {
-    if (!mediaUrl) return;
+    if (!mediaUrl || !mediaUrl.startsWith("blob:")) return;
     return () => URL.revokeObjectURL(mediaUrl);
   }, [mediaUrl]);
+
+  // Persist the playhead on pause so Continue restores the last watched spot.
+  // Do not key the main auto-save on `time` — that would write on every frame.
+  useEffect(() => {
+    if (isInitialLoad.current || playing || !projectId) return;
+    const at = time;
+    const timer = window.setTimeout(() => {
+      void api.updateProject(projectId, { playhead: at }).catch(() => {});
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [playing, time, projectId]);
 
   // Track real fullscreen so the toolbar button reflects the actual state.
   useEffect(() => {
@@ -253,6 +458,7 @@ export default function Editor() {
     setBusy(true);
     setMoments([]);
     setClips([]);
+    serverClipIds.current.clear();
     setChecks([]);
     setSelectedClipId(null);
     setMenu(null);
@@ -266,47 +472,119 @@ export default function Editor() {
     setMediaDuration(0);
     setFrames([]);
     setPeaks(null);
+    // A new take is a draft. Recutting a posted hit/mid/flop starts a fresh
+    // project so the posted History row (and its Re-cut action) stays put.
+    if (projectStatus === "posted" || projectStatus === "checked") {
+      setProjectId(null);
+      if (typeof window !== "undefined") {
+        const next = new URL(window.location.href);
+        next.searchParams.delete("project");
+        window.history.replaceState({}, "", next.toString());
+      }
+    }
+    setProjectStatus("draft");
+    setProjectVerdict(null);
+    setProjectViews(null);
+    setProjectPostUrl(null);
+    setProjectPostId(null);
+    resumePlayhead.current = null;
     const url = URL.createObjectURL(file);
     setMediaUrl(url);
 
-    // Probe the real duration first, so the take block and every cut land at
-    // their true time on the timeline instead of a fixed guess.
     const probed = await probeDuration(url);
-    const nextVideo = buildVideo(file, probed);
-    setVideo(nextVideo);
+    const initialTake: TakeSegment = {
+      id: uid("take"),
+      title: stem(file.name) || "Main take",
+      start: 0,
+      end: probed,
+      sourceStart: 0,
+      sourceEnd: probed,
+    };
+    setTakeSegments([initialTake]);
+    setSelectedTakeId(initialTake.id);
     setTakeIn(0);
-    setTakeOut(nextVideo.duration);
+    setTakeOut(probed);
     setProjectName(stem(file.name));
     setMessages((prev) => [
       ...prev,
       youMessage(`Uploaded ${file.name}`),
-      mindMessage("Watching the tape and cutting the beats that stand alone…"),
+      mindMessage("Uploading video and detecting standout moments…"),
     ]);
-    setTool("cuts");
+    setTool("moments");
 
-    await sleep(1400);
-    // Detect the beats, then cut every one automatically — no manual keep/skip.
-    // Cuts exist the moment the tape is read, so Share/Export are live at once.
-    const nextMoments = buildMoments(nextVideo.id, nextVideo.duration).map((moment) => ({
-      ...moment,
-      status: "accepted" as const,
-    }));
-    const nextClips = nextMoments.map((moment) =>
-      buildClipFromMoment(moment, nextVideo.id),
-    );
-    setMoments(nextMoments);
-    setClips(nextClips);
-    setSelectedClipId(nextClips[0]?.id ?? null);
-    setBusy(false);
-    pushMind(
-      `Cut ${nextClips.length} clips from the tape. Titles and hashtags are on each — tweak a caption, then Share or Export.`,
-    );
+    try {
+      // 1. Upload to backend
+      const nextVideo = await api.uploadVideo(file);
+      setVideo(nextVideo);
+      if (nextVideo.duration > 0) {
+        setTakeOut(nextVideo.duration);
+      }
+
+      // 2. Poll for moments (propose_moments runs in a FastAPI background task).
+      // Real Whisper on a genuinely long take can run well past a minute, so
+      // give it room before declaring the tape momentless.
+      let foundMoments: Moment[] = [];
+      const startTime = Date.now();
+      const timeoutMs = 180_000;
+      while (Date.now() - startTime < timeoutMs) {
+        await sleep(1000);
+        foundMoments = await api.listMoments(nextVideo.id);
+        if (foundMoments && foundMoments.length > 0) {
+          break;
+        }
+      }
+
+      setMoments(foundMoments);
+      setBusy(false);
+
+      if (foundMoments.length > 0) {
+        pushMind(
+          `Found ${foundMoments.length} standout moments. Review each beat: click Keep to turn it into a clip, or Skip.`,
+        );
+      } else {
+        pushMind(
+          "Processed the tape, but no standout moments surfaced yet. Longer takes can take a minute — you can also cut clips manually from the take.",
+        );
+      }
+    } catch (err: any) {
+      setBusy(false);
+      pushMind(`Upload failed: ${err.message || err}`);
+    }
+  }
+
+  async function handleDecideMoment(
+    momentId: string,
+    decision: "accept" | "reject",
+  ) {
+    try {
+      const updated = await api.decideMoment(momentId, decision);
+      setMoments((prev) => prev.map((m) => (m.id === momentId ? updated : m)));
+
+      if (decision === "accept") {
+        const vidId = updated.videoId || video?.id;
+        if (vidId) {
+          const nextClips = await api.listClips(vidId);
+          setClips(nextClips);
+          serverClipIds.current = new Set(nextClips.map((c) => c.id));
+          const newClip = nextClips.find((c) => c.momentId === momentId);
+          if (newClip) {
+            setSelectedClipId(newClip.id);
+          }
+        }
+        pushMind(`Kept “${updated.label}”. Cut created in Cuts.`);
+      } else {
+        pushMind(`Skipped “${updated.label}”.`);
+      }
+    } catch (err: any) {
+      pushMind(`Failed to ${decision} moment: ${err.message || err}`);
+    }
   }
 
   function handleReset() {
     setVideo(null);
     setMoments([]);
     setClips([]);
+    serverClipIds.current.clear();
     setChecks([]);
     setBusy(false);
     setSelectedClipId(null);
@@ -318,6 +596,22 @@ export default function Editor() {
     setPreviewFlip(false);
     setMediaUrl(null);
     setMediaDuration(0);
+    setTakeSegments([]);
+    setSelectedTakeId(null);
+    setProjectId(null);
+    setSaveStatus("idle");
+    setProjectStatus("draft");
+    setProjectVerdict(null);
+    setProjectViews(null);
+    setProjectPostUrl(null);
+    setProjectPostId(null);
+    resumePlayhead.current = null;
+    setTime(0);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("project");
+      window.history.replaceState({}, "", url.toString());
+    }
     setTakeIn(0);
     setTakeOut(0);
     setTrimPulse(false);
@@ -367,6 +661,26 @@ export default function Editor() {
     setFuture((f) => f.slice(1));
   }
 
+  function handleClipMove(clipId: string, nextStart: number, nextEnd: number) {
+    setClips((prev) =>
+      prev.map((c) =>
+        c.id === clipId ? { ...c, start: nextStart, end: nextEnd } : c
+      )
+    );
+  }
+
+  function handleClipMoveCommit(clipId: string, nextStart: number, nextEnd: number) {
+    const next = clips.map((c) =>
+      c.id === clipId ? { ...c, start: nextStart, end: nextEnd } : c
+    );
+    commit(next);
+    const movedClip = next.find((c) => c.id === clipId);
+    if (movedClip) {
+      pushMind(`Moved “${movedClip.title}” to ${formatTime(nextStart)}.`);
+      void api.updateClip(clipId, { start: nextStart, end: nextEnd }).catch(() => {});
+    }
+  }
+
   function splitClip(id: string) {
     const clip = clips.find((c) => c.id === id);
     if (!clip) return;
@@ -375,19 +689,26 @@ export default function Editor() {
       pushMind("Put the playhead inside the clip to split it.");
       return;
     }
-    const left: Clip = { ...clip, end: at };
+    const baseTitle = clip.title.replace(/ · part \d+$/i, "");
+    const left: Clip = {
+      ...clip,
+      end: at,
+      title: `${baseTitle} · part 1`,
+    };
     const right: Clip = {
       ...clip,
       id: uid("clip"),
+      title: `${baseTitle} · part 2`,
       start: at,
+      end: clip.end,
       posted: false,
       postId: undefined,
       postUrl: undefined,
       frozen: false,
     };
     commit(clips.flatMap((c) => (c.id === id ? [left, right] : [c])));
-    setSelectedClipId(left.id);
-    pushMind(`Split “${clip.title}” at ${Math.round(at)}s.`);
+    setSelectedClipId(right.id);
+    pushMind(`Split “${clip.title}” into two parts at ${formatTime(at)}.`);
   }
 
   function duplicateClip(id: string) {
@@ -531,42 +852,278 @@ export default function Editor() {
 
   /* ---- Take: edit the main clip (the take), not a cut ---- */
 
-  // Build a valid Clip for a slice of the take by routing through the same
-  // moment→clip builder the auto-cut uses, so nothing downstream can tell a
-  // hand-made cut from an auto one.
   function makeTakeClip(start: number, end: number, label: string): Clip {
-    const moment: Moment = {
-      id: uid("mom"),
+    const momentId = uid("mom");
+    return {
+      id: uid("clip"),
+      momentId,
       videoId: video?.id ?? "take",
+      title: label,
+      caption: `${label}\n\nCut from the take.`,
+      hashtags: ["#encore", "#shorts", "#bts"],
+      tags: ["take", "encore"],
       start,
       end,
-      label,
-      reason: "Cut from the take.",
-      status: "accepted",
-    };
-    return {
-      ...buildClipFromMoment(moment, video?.id ?? "take"),
-      id: uid("clip"),
+      posted: false,
     };
   }
 
   const takeHi = () => (takeOut > 0 ? takeOut : duration);
 
+  function clamp(val: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, val));
+  }
+
+  function alignSegmentsToLeft(segments: TakeSegment[]): TakeSegment[] {
+    if (segments.length === 0) return [];
+    let currentStart = 0;
+    return segments.map((seg) => {
+      const srcStart = seg.sourceStart !== undefined ? seg.sourceStart : seg.start;
+      const srcEnd = seg.sourceEnd !== undefined ? seg.sourceEnd : seg.end;
+      const dur = Math.max(srcEnd - srcStart, 0.1);
+      const updated: TakeSegment = {
+        ...seg,
+        start: currentStart,
+        end: currentStart + dur,
+        sourceStart: srcStart,
+        sourceEnd: srcEnd,
+      };
+      currentStart += dur;
+      return updated;
+    });
+  }
+
+  function timelineToSourceTime(
+    t: number,
+    segments: TakeSegment[],
+    fallbackTakeIn: number,
+    fallbackTakeOut: number,
+    mediaDur: number
+  ): number {
+    if (segments && segments.length > 0) {
+      const seg =
+        segments.find((s) => t >= s.start - 0.001 && t <= s.end + 0.001) ||
+        (t < segments[0].start ? segments[0] : segments[segments.length - 1]);
+      if (seg) {
+        const srcStart = seg.sourceStart !== undefined ? seg.sourceStart : seg.start;
+        const offset = Math.max(0, t - seg.start);
+        return srcStart + offset;
+      }
+    }
+    return fallbackTakeIn + t;
+  }
+
+  function sourceToTimelineTime(
+    srcTime: number,
+    segments: TakeSegment[],
+    fallbackTakeIn: number
+  ): number {
+    if (segments && segments.length > 0) {
+      const seg = segments.find((s) => {
+        const srcStart = s.sourceStart !== undefined ? s.sourceStart : s.start;
+        const srcEnd = s.sourceEnd !== undefined ? s.sourceEnd : s.end;
+        return srcTime >= srcStart - 0.05 && srcTime <= srcEnd + 0.05;
+      });
+      if (seg) {
+        const srcStart = seg.sourceStart !== undefined ? seg.sourceStart : seg.start;
+        return seg.start + Math.max(0, srcTime - srcStart);
+      }
+    }
+    return Math.max(0, srcTime - fallbackTakeIn);
+  }
+
   function splitTake() {
-    if (!video) return;
-    const lo = takeIn;
-    const hi = takeHi();
-    const at = time;
-    if (at <= lo + 0.1 || at >= hi - 0.1) {
-      pushMind("Move the playhead inside the take, then split.");
+    if (!video && duration <= 0 && (!takeSegments || takeSegments.length === 0)) return;
+    const atTimeline = time;
+    const segments =
+      takeSegments.length > 0
+        ? takeSegments
+        : [
+            {
+              id: uid("take"),
+              title: projectName || "Main take",
+              start: 0,
+              end: duration,
+              sourceStart: takeIn,
+              sourceEnd: takeOut > 0 ? takeOut : duration,
+            },
+          ];
+
+    // Find the take segment under the playhead
+    const targetSeg =
+      segments.find((s) => atTimeline > s.start + 0.05 && atTimeline < s.end - 0.05) ||
+      (selectedTakeId ? segments.find((s) => s.id === selectedTakeId) : segments[0]);
+
+    if (!targetSeg || atTimeline <= targetSeg.start + 0.05 || atTimeline >= targetSeg.end - 0.05) {
+      pushMind("Move the playhead inside the main take to split it.");
       return;
     }
-    const left = makeTakeClip(lo, at, "Take · part 1");
-    const right = makeTakeClip(at, hi, "Take · part 2");
-    commit([...clips, left, right]);
-    setSelectedClipId(left.id);
-    setTool("cuts");
-    pushMind(`Split the take at ${Math.round(at)}s into two cuts.`);
+
+    const srcStart = targetSeg.sourceStart !== undefined ? targetSeg.sourceStart : targetSeg.start;
+    const srcEnd = targetSeg.sourceEnd !== undefined ? targetSeg.sourceEnd : targetSeg.end;
+    const offsetInSeg = atTimeline - targetSeg.start;
+    const srcSplit = srcStart + offsetInSeg;
+
+    const baseTitle = targetSeg.title.replace(/ · part \d+$/i, "");
+    const left: TakeSegment = {
+      ...targetSeg,
+      title: `${baseTitle} · part 1`,
+      sourceStart: srcStart,
+      sourceEnd: srcSplit,
+    };
+    const right: TakeSegment = {
+      id: uid("take"),
+      title: `${baseTitle} · part 2`,
+      start: atTimeline,
+      end: targetSeg.end,
+      sourceStart: srcSplit,
+      sourceEnd: srcEnd,
+    };
+
+    const nextSegments = segments.flatMap((s) =>
+      s.id === targetSeg.id ? [left, right] : [s]
+    );
+
+    // Automatically move to the left side, aligning with the start of the timeline
+    const aligned = alignSegmentsToLeft(nextSegments);
+    setTakeSegments(aligned);
+
+    const rightSegInAligned = aligned.find((s) => s.id === right.id);
+    if (rightSegInAligned) {
+      setSelectedTakeId(rightSegInAligned.id);
+    }
+    pushMind(`Split main clip at ${formatTime(atTimeline)} and aligned with timeline.`);
+  }
+
+  function handleSplit() {
+    splitTake();
+  }
+
+  function handleTakeSegmentMove(takeId: string, nextStart: number, nextEnd: number) {
+    setTakeSegments((prev) =>
+      prev.map((s) =>
+        s.id === takeId ? { ...s, start: nextStart, end: nextEnd } : s
+      )
+    );
+  }
+
+  function handleTakeSegmentMoveCommit(
+    takeId: string,
+    nextStart: number,
+    nextEnd: number,
+    mode?: "move" | "trim-l" | "trim-r"
+  ) {
+    setTakeSegments((prev) => {
+      const segIndex = prev.findIndex((s) => s.id === takeId);
+      if (segIndex === -1) return prev;
+
+      const target = prev[segIndex];
+      const origSourceStart =
+        target.sourceStart !== undefined ? target.sourceStart : target.start;
+      const origSourceEnd =
+        target.sourceEnd !== undefined ? target.sourceEnd : target.end;
+
+      let updatedTarget: TakeSegment = { ...target };
+
+      if (mode === "trim-l") {
+        const dt = nextStart - target.start;
+        const newSrcStart = clamp(origSourceStart + dt, 0, origSourceEnd - 0.2);
+        updatedTarget = {
+          ...target,
+          sourceStart: newSrcStart,
+          sourceEnd: origSourceEnd,
+        };
+      } else if (mode === "trim-r") {
+        const dt = nextEnd - target.end;
+        const rawDur = mediaDuration > 0 ? mediaDuration : 999999;
+        const newSrcEnd = clamp(origSourceEnd + dt, origSourceStart + 0.2, rawDur);
+        updatedTarget = {
+          ...target,
+          sourceStart: origSourceStart,
+          sourceEnd: newSrcEnd,
+        };
+      } else {
+        // "move": horizontal repositioning
+        updatedTarget = {
+          ...target,
+          start: nextStart,
+          end: nextEnd,
+        };
+        return prev.map((s) => (s.id === takeId ? updatedTarget : s));
+      }
+
+      // Automatically move to the left side, aligning with the start of the timeline
+      const updatedList = prev.map((s) => (s.id === takeId ? updatedTarget : s));
+      const aligned = alignSegmentsToLeft(updatedList);
+
+      const first = aligned[0];
+      if (first && first.sourceStart !== undefined) {
+        setTakeIn(first.sourceStart);
+      }
+      const last = aligned[aligned.length - 1];
+      if (last && last.sourceEnd !== undefined) {
+        setTakeOut(last.sourceEnd);
+      }
+
+      pushMind(`Trimmed “${updatedTarget.title}” and aligned with timeline.`);
+      return aligned;
+    });
+  }
+
+  function handleTakeTrim(nextIn: number, nextOut: number) {
+    setTakeIn(nextIn);
+    setTakeOut(nextOut);
+    const dur = Math.max(nextOut - nextIn, 0.2);
+    setTakeSegments((prev) => {
+      if (prev.length <= 1) {
+        const title = prev[0]?.title || projectName || "Main take";
+        return [
+          {
+            id: prev[0]?.id || uid("take"),
+            title,
+            start: 0,
+            end: dur,
+            sourceStart: nextIn,
+            sourceEnd: nextOut,
+          },
+        ];
+      }
+      const targetId = selectedTakeId || prev[0].id;
+      const nextList = prev.map((s) =>
+        s.id === targetId
+          ? {
+              ...s,
+              sourceStart: nextIn,
+              sourceEnd: nextOut,
+            }
+          : s
+      );
+      return alignSegmentsToLeft(nextList);
+    });
+    setTime(0);
+    seek(0);
+  }
+
+  function getActivePlaybackBounds(currentTime: number): { inPoint: number; outPoint: number } {
+    if (takeSegments && takeSegments.length > 0) {
+      const currentSeg = takeSegments.find(
+        (s) => currentTime >= s.start - 0.05 && currentTime <= s.end + 0.05
+      );
+      if (currentSeg) {
+        return { inPoint: currentSeg.start, outPoint: currentSeg.end };
+      }
+      if (selectedTakeId) {
+        const sel = takeSegments.find((s) => s.id === selectedTakeId);
+        if (sel) return { inPoint: sel.start, outPoint: sel.end };
+      }
+      const minIn = Math.min(...takeSegments.map((s) => s.start));
+      const maxOut = Math.max(...takeSegments.map((s) => s.end));
+      return { inPoint: minIn, outPoint: maxOut };
+    }
+
+    const inPoint = takeIn;
+    const outPoint = takeOut > 0 ? takeOut : duration;
+    return { inPoint, outPoint };
   }
 
   function duplicateTake() {
@@ -594,8 +1151,21 @@ export default function Editor() {
     pushMind(`Cut a ${Math.round(end - start)}s clip from ${Math.round(start)}s.`);
   }
 
-  function deleteTake() {
-    if (!video) return;
+  function deleteTake(takeId?: string | null) {
+    if (!video && duration <= 0) return;
+    const targetId = takeId || selectedTakeId;
+    if (takeSegments.length > 1 && targetId) {
+      setTakeSegments((prev) => {
+        const next = prev.filter((s) => s.id !== targetId);
+        const aligned = alignSegmentsToLeft(next);
+        if (aligned.length > 0) setSelectedTakeId(aligned[0].id);
+        setTime(0);
+        seek(0);
+        return aligned;
+      });
+      pushMind("Deleted take segment. Remaining clips aligned to timeline start.");
+      return;
+    }
     handleReset();
   }
 
@@ -622,7 +1192,7 @@ export default function Editor() {
   function onTakeAction(action: ClipMenuAction) {
     switch (action) {
       case "split":
-        splitTake();
+        handleSplit();
         break;
       case "trim":
         trimTake();
@@ -648,8 +1218,9 @@ export default function Editor() {
     setMenu({ kind: "clip", clipId, x, y });
   }
 
-  function openTakeMenu(x: number, y: number) {
-    setMenu({ kind: "take", clipId: null, x, y });
+  function openTakeMenu(takeId: string | null, x: number, y: number) {
+    if (takeId) setSelectedTakeId(takeId);
+    setMenu({ kind: "take", clipId: takeId, x, y });
   }
 
   function onMenuAction(action: ClipMenuAction) {
@@ -711,7 +1282,7 @@ export default function Editor() {
     if (!video) return;
     switch (edit) {
       case "split":
-        splitTake();
+        handleSplit();
         break;
       case "delete":
         deleteTake();
@@ -736,29 +1307,121 @@ export default function Editor() {
     clips[0] ??
     null;
 
-  /** Publishes a cut and comes back with the verdict — the YouTube path. */
-  async function shipToYouTube(clip: Clip) {
-    const postId = `post_${clip.id}`;
-    const postUrl = `https://youtube.com/shorts/encore-${clip.id.slice(-5)}`;
-    setClips((prev) =>
-      prev.map((c) =>
-        c.id === clip.id ? { ...c, posted: true, postId, postUrl } : c,
-      ),
-    );
-    pushMind(
-      `Posted “${clip.title}” to YouTube. I’ll check views against your median after a beat — no need to ask.`,
-    );
+  /** Publishes a cut and comes back with the verdict — the real YouTube / API path. */
+  /**
+   * Guarantee the clip exists on the backend with its current copy before we
+   * post it. Clips the server already knows are PATCHed first, so caption/title
+   * and trim edits actually ship (instead of the stale server copy); local cuts
+   * from the editing tools are created from their range, so they stop 404-ing on
+   * publish. Returns the server clip whose id the post endpoint will accept.
+   */
+  async function ensureServerClip(clip: Clip): Promise<Clip> {
+    if (!video) throw new Error("Upload a take before publishing.");
+    if (serverClipIds.current.has(clip.id)) {
+      const patched = await api.updateClip(clip.id, {
+        title: clip.title,
+        caption: clip.caption,
+        hashtags: clip.hashtags,
+        tags: clip.tags,
+        start: clip.start,
+        end: clip.end,
+      });
+      serverClipIds.current.add(patched.id);
+      return patched;
+    }
+    const created = await api.createClip({
+      videoId: video.id,
+      start: clip.start,
+      end: clip.end,
+      title: clip.title,
+      caption: clip.caption,
+      hashtags: clip.hashtags,
+      tags: clip.tags,
+      momentId: clip.momentId,
+      label: clip.title,
+    });
+    serverClipIds.current.add(created.id);
+    return created;
+  }
 
-    await sleep(2200);
-    const check = buildPostCheck({ ...clip, posted: true, postId, postUrl });
-    setChecks((prev) => [check, ...prev]);
-    pushMind(
-      check.verdict === "hit"
-        ? `${check.views.toLocaleString()} views. Hit. That hook style goes up in the playbook.`
-        : check.verdict === "flop"
-          ? `${check.views.toLocaleString()} views. Flop. ${check.recutHook}`
-          : `${check.views.toLocaleString()} views. Mid. Leave it and ship a leftover tomorrow.`,
-    );
+  async function shipToYouTube(clip: Clip) {
+    try {
+      pushMind(`Posting “${clip.title}” to YouTube…`);
+      const ready = await ensureServerClip(clip);
+      const { postId, postUrl } = await api.postClip(ready.id);
+      setClips((prev) =>
+        prev.map((c) =>
+          c.id === clip.id ? { ...ready, posted: true, postId, postUrl } : c,
+        ),
+      );
+      if (selectedClipId === clip.id) setSelectedClipId(ready.id);
+      setProjectStatus("posted");
+      setProjectPostUrl(postUrl);
+      setProjectPostId(postId);
+      pushMind(
+        `Posted “${clip.title}” to YouTube (${postUrl}). Checking views against your median…`,
+      );
+
+      await sleep(1800);
+      const check = await api.checkPost(postId);
+      setChecks((prev) => [check, ...prev]);
+      setProjectStatus("checked");
+      setProjectVerdict(check.verdict);
+      setProjectViews(check.views);
+      pushMind(
+        check.verdict === "hit"
+          ? `${check.views.toLocaleString()} views. Hit! That hook style goes up in the playbook.`
+          : check.verdict === "flop"
+            ? `${check.views.toLocaleString()} views. Flop. ${check.note}${
+                check.recutHook ? ` Suggestion: ${check.recutHook}` : ""
+              }`
+            : `${check.views.toLocaleString()} views. Mid. ${check.note}`,
+      );
+      // Persist immediately so History swaps Continue → Re-cut even if they
+      // leave before the debounced auto-save fires.
+      try {
+        const outcome = {
+          status: "checked" as const,
+          verdict: check.verdict,
+          views: check.views,
+          postUrl,
+          postId,
+        };
+        if (projectId) {
+          await api.updateProject(projectId, outcome);
+        } else {
+          const saved = await api.saveProject({
+            name: projectName || "Untitled Take",
+            videoId: video?.id || null,
+            mediaUrl: mediaUrl || null,
+            takeIn,
+            takeOut,
+            takeSegments,
+            clips,
+            effects: {
+              rotate: previewRotate,
+              flip: previewFlip,
+              aspect,
+              aiOn,
+              compareOn,
+            },
+            ...outcome,
+          });
+          if (saved?.id) {
+            setProjectId(saved.id);
+            if (typeof window !== "undefined") {
+              const next = new URL(window.location.href);
+              next.searchParams.set("project", saved.id);
+              window.history.replaceState({}, "", next.toString());
+            }
+          }
+        }
+      } catch {
+        /* auto-save still has the new fields in its deps */
+      }
+    } catch (err: any) {
+      pushMind(`Publish failed: ${err.message || err}`);
+    }
   }
 
   async function handleExport(target: ExportTarget) {
@@ -799,27 +1462,24 @@ export default function Editor() {
 
   /* ---- Mind ---- */
 
-  function handleSend(text: string) {
+  async function handleSend(text: string) {
     setPrompt("");
     setMessages((prev) => [...prev, youMessage(text)]);
-    const lower = text.toLowerCase();
-    window.setTimeout(() => {
-      if (lower.includes("leftover") || lower.includes("left over")) {
+    if (!video) {
+      window.setTimeout(() => {
         pushMind(
-          "You still have the exam-panic rant unused. Shorts liked rants last month — want me to ship it?",
+          "I’m on the notebook. Drop a long take first so I have context on what we’re editing.",
         );
-      } else if (lower.includes("flop") || lower.includes("check")) {
-        pushMind(
-          checks[0]
-            ? `Latest: ${checks[0].verdict} at ${checks[0].views.toLocaleString()} views.`
-            : "Nothing live yet. Export a cut to YouTube and I’ll check it on my own.",
-        );
-      } else {
-        pushMind(
-          "I’m on the notebook. Keep or skip the moments, edit captions, export — I’ll handle the live check.",
-        );
-      }
-    }, 500);
+      }, 400);
+      return;
+    }
+
+    try {
+      const reply = await api.sendMessage(video.id, text);
+      setMessages((prev) => [...prev, reply]);
+    } catch (err: any) {
+      pushMind(`Failed to reach Encore Mind: ${err.message || err}`);
+    }
   }
 
   /* ---- Transport ---- */
@@ -829,24 +1489,59 @@ export default function Editor() {
   // stored duration so the beats still lay out.
   const duration = mediaDuration > 0 ? mediaDuration : video?.duration ?? 0;
 
+  // Active timeline duration: spans exactly the trimmed active media so the timeline
+  // ruler never includes the untrimmed portion!
+  const activeTimelineDuration = useMemo(() => {
+    if (takeSegments && takeSegments.length > 0) {
+      return Math.max(
+        takeSegments.reduce((acc, s) => Math.max(acc, s.end), 0),
+        0.1,
+      );
+    }
+    if (takeOut > 0) {
+      return Math.max(takeOut - takeIn, 0.1);
+    }
+    return duration;
+  }, [takeSegments, takeIn, takeOut, duration]);
+
   const seek = useCallback(
-    (seconds: number) => {
+    (timelineSeconds: number) => {
       const el = mediaRef.current;
-      const bounded = Math.max(0, seconds);
-      if (el && mediaDuration > 0) {
-        el.currentTime = Math.min(bounded, mediaDuration);
-      }
+      const bounded = Math.max(0, Math.min(timelineSeconds, activeTimelineDuration));
       setTime(bounded);
+      if (el && mediaDuration > 0) {
+        const srcTime = timelineToSourceTime(
+          bounded,
+          takeSegments,
+          takeIn,
+          takeOut,
+          mediaDuration,
+        );
+        el.currentTime = Math.min(Math.max(0, srcTime), mediaDuration);
+      }
     },
-    [mediaDuration],
+    [activeTimelineDuration, takeSegments, takeIn, takeOut, mediaDuration],
   );
 
   const togglePlay = useCallback(() => {
     const el = mediaRef.current;
     if (!el) return;
-    if (el.paused) void el.play();
-    else el.pause();
-  }, []);
+    if (el.paused) {
+      if (time >= activeTimelineDuration - 0.05 || time < 0) {
+        const startSrc = timelineToSourceTime(0, takeSegments, takeIn, takeOut, mediaDuration);
+        el.currentTime = startSrc;
+        setTime(0);
+      } else {
+        const curSrc = timelineToSourceTime(time, takeSegments, takeIn, takeOut, mediaDuration);
+        if (Math.abs(el.currentTime - curSrc) > 0.08) {
+          el.currentTime = curSrc;
+        }
+      }
+      void el.play();
+    } else {
+      el.pause();
+    }
+  }, [time, activeTimelineDuration, takeSegments, takeIn, takeOut, mediaDuration]);
 
   function toggleFullscreen() {
     if (typeof document === "undefined") return;
@@ -873,7 +1568,7 @@ export default function Editor() {
   });
   kbRef.current = {
     split: () => {
-      if (selectedClipId) splitClip(selectedClipId);
+      handleSplit();
     },
     del: () => {
       if (selectedClipId) deleteClip(selectedClipId);
@@ -950,6 +1645,14 @@ export default function Editor() {
 
   const stage = workflowIndex({ video, busy, moments, clips });
   const menuClip = menu ? clips.find((c) => c.id === menu.clipId) : null;
+  const aspectMeta = ASPECTS.find((item) => item.id === aspect) ?? ASPECTS[0];
+  const hasTake = Boolean(mediaUrl || video || takeSegments.length > 0);
+
+  function cycleAspect() {
+    const index = ASPECTS.findIndex((item) => item.id === aspect);
+    const next = ASPECTS[(index + 1) % ASPECTS.length] ?? ASPECTS[0];
+    setAspect(next.id);
+  }
 
   return (
     <main className={panelOpen ? "cutroom" : "cutroom is-panel-closed"}>
@@ -986,6 +1689,50 @@ export default function Editor() {
             </button>
           )}
           <span>{stamp}</span>
+          <span
+            className="cut__autosave"
+            style={{
+              fontSize: "0.72rem",
+              color:
+                saveStatus === "saving"
+                  ? "#eab308"
+                  : saveStatus === "saved"
+                    ? "#22c55e"
+                    : "#64748b",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "5px",
+              marginLeft: "8px",
+              fontWeight: 500,
+              opacity: saveStatus === "idle" ? 0.4 : 1,
+              transition: "opacity 0.2s, color 0.2s",
+            }}
+            title={
+              saveStatus === "saving"
+                ? "Saving edits to history..."
+                : "All options and edits saved to history"
+            }
+          >
+            <span
+              style={{
+                width: "6px",
+                height: "6px",
+                borderRadius: "50%",
+                background:
+                  saveStatus === "saving"
+                    ? "#eab308"
+                    : saveStatus === "saved"
+                      ? "#22c55e"
+                      : "#64748b",
+                display: "inline-block",
+              }}
+            />
+            {saveStatus === "saving"
+              ? "Auto-saving..."
+              : saveStatus === "saved"
+                ? "Saved to history"
+                : "Auto-save active"}
+          </span>
         </div>
 
         <label className="cut__aspect">
@@ -1019,25 +1766,34 @@ export default function Editor() {
         />
       </header>
 
-      <ToolRail tool={tool} counts={{ cuts: clips.length }} onTool={setTool} />
+      <ToolRail
+        tool={tool}
+        counts={{
+          moments: moments.filter((m) => m.status === "pending").length,
+          cuts: clips.length,
+        }}
+        onTool={setTool}
+      />
 
       <ToolPanel
         tool={tool}
         video={video}
         busy={busy}
+        moments={moments}
         clips={clips}
         messages={messages}
         selectedClipId={selectedClipId}
         prompt={prompt}
         onPrompt={setPrompt}
         onSend={handleSend}
-        onUpload={handleUpload}
         onReset={handleReset}
         onPickClip={setSelectedClipId}
         onClipChange={handleClipChange}
         onClipContext={openMenu}
         onSeek={seek}
         onRecut={handleRecut}
+        onDecideMoment={handleDecideMoment}
+        onToolChange={setTool}
       />
 
       <section className="cut__stage" aria-label="Preview and timeline" ref={stageRef}>
@@ -1047,19 +1803,19 @@ export default function Editor() {
           onContextMenu={(event) => {
             if (!video) return;
             event.preventDefault();
-            openTakeMenu(event.clientX, event.clientY);
+            openTakeMenu(selectedTakeId, event.clientX, event.clientY);
           }}
         >
-          {mediaUrl ? (
-            <div
-              className="cut__frame"
-              style={
-                {
-                  "--ar":
-                    ASPECTS.find((item) => item.id === aspect)?.n ?? 16 / 9,
-                } as CSSProperties
-              }
-            >
+          <div
+            className="cut__frame"
+            style={{ "--ar": aspectMeta.n } as CSSProperties}
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest(".cut__empty-hit")) return;
+              cycleAspect();
+            }}
+            title="Click to change aspect ratio"
+          >
+            {mediaUrl ? (
               <video
                 ref={mediaRef}
                 src={mediaUrl}
@@ -1069,52 +1825,100 @@ export default function Editor() {
                     previewFlip ? -1 : 1
                   })`,
                 }}
-                onLoadedMetadata={(event) =>
-                  setMediaDuration(event.currentTarget.duration || 0)
-                }
-                onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
+                onLoadedMetadata={(event) => {
+                  const el = event.currentTarget;
+                  const dur = el.duration || 0;
+                  setMediaDuration(dur);
+                  const at = resumePlayhead.current;
+                  if (at != null && at > 0 && dur > 0) {
+                    const src = timelineToSourceTime(
+                      at,
+                      takeSegments,
+                      takeIn,
+                      takeOut,
+                      dur,
+                    );
+                    el.currentTime = Math.min(Math.max(0, src), dur);
+                    setTime(at);
+                    resumePlayhead.current = null;
+                  }
+                }}
+                onTimeUpdate={(event) => {
+                  const el = event.currentTarget;
+                  const srcCurrent = el.currentTime;
+                  const t = sourceToTimelineTime(srcCurrent, takeSegments, takeIn);
+                  setTime(t);
+
+                  if (!el.paused && t >= activeTimelineDuration - 0.03) {
+                    el.pause();
+                    const endSrc = timelineToSourceTime(
+                      activeTimelineDuration,
+                      takeSegments,
+                      takeIn,
+                      takeOut,
+                      mediaDuration,
+                    );
+                    el.currentTime = endSrc;
+                    setTime(activeTimelineDuration);
+                    setPlaying(false);
+                  }
+                }}
                 onPlay={() => setPlaying(true)}
                 onPause={() => setPlaying(false)}
+                onError={() => {
+                  pushMind(
+                    "Couldn't load the saved take. Re-upload it from the Take panel to keep editing.",
+                  );
+                }}
               />
-              {compareOn ? <span className="cut__compare" aria-hidden="true" /> : null}
-            </div>
-          ) : (
-            <div
-              className={stageDrag ? "cut__empty is-drag" : "cut__empty"}
-              onDragOver={(event) => {
-                event.preventDefault();
-                setStageDrag(true);
-              }}
-              onDragLeave={() => setStageDrag(false)}
-              onDrop={(event) => {
-                event.preventDefault();
-                setStageDrag(false);
-                takeStageFile(event.dataTransfer.files?.[0]);
-              }}
-            >
-              <button
-                type="button"
-                className="cut__empty-hit"
-                onClick={() => stageFileRef.current?.click()}
+            ) : (
+              <div
+                className={stageDrag ? "cut__empty is-drag" : "cut__empty"}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setStageDrag(true);
+                }}
+                onDragLeave={() => setStageDrag(false)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setStageDrag(false);
+                  takeStageFile(event.dataTransfer.files?.[0]);
+                }}
               >
-                <span className="cut__empty-orb" aria-hidden="true">
-                  <Plus />
-                </span>
-                <strong>Click to upload</strong>
-                <span className="cut__empty-sub">
-                  or drag and drop a long take here
-                </span>
-              </button>
-              <input
-                ref={stageFileRef}
-                className="cut__empty-file"
-                type="file"
-                accept="video/*"
-                hidden
-                onChange={(event) => takeStageFile(event.target.files?.[0])}
-              />
-            </div>
-          )}
+                {hasTake ? (
+                  <div className="cut__empty-hit" aria-live="polite">
+                    <strong>{projectName === "Opening…" ? "Opening project" : projectName}</strong>
+                    <span className="cut__empty-sub">Loading your take…</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="cut__empty-hit"
+                    onClick={() => stageFileRef.current?.click()}
+                  >
+                    <span className="cut__empty-orb" aria-hidden="true">
+                      <Plus />
+                    </span>
+                    <strong>Click to upload</strong>
+                    <span className="cut__empty-sub">
+                      or drag and drop a long take here
+                    </span>
+                  </button>
+                )}
+                <input
+                  ref={stageFileRef}
+                  className="cut__empty-file"
+                  type="file"
+                  accept="video/*"
+                  hidden
+                  onChange={(event) => takeStageFile(event.target.files?.[0])}
+                />
+              </div>
+            )}
+            {compareOn && mediaUrl ? (
+              <span className="cut__compare" aria-hidden="true" />
+            ) : null}
+          </div>
 
           {aiOn ? (
             <span className="cut__aibadge" aria-hidden="true">
@@ -1134,7 +1938,7 @@ export default function Editor() {
           time={time}
           duration={duration}
           playing={playing}
-          canEdit={!!video}
+          canEdit={!!video || !!mediaUrl}
           aiOn={aiOn}
           compareOn={compareOn}
           fullscreen={fullscreen}
@@ -1152,11 +1956,14 @@ export default function Editor() {
         />
 
         <Timeline
-          duration={duration}
+          duration={activeTimelineDuration}
+          mediaDuration={mediaDuration > 0 ? mediaDuration : video?.duration ?? 0}
           time={time}
-          takeName={mediaUrl ? projectName : null}
+          takeName={hasTake && projectName !== "Opening…" ? projectName : null}
           takeIn={takeIn}
           takeOut={takeOut > 0 ? takeOut : duration}
+          takeSegments={takeSegments}
+          selectedTakeId={selectedTakeId}
           clips={clips}
           selectedClipId={selectedClipId}
           pxPerSecond={pxPerSecond}
@@ -1169,12 +1976,17 @@ export default function Editor() {
             setSelectedClipId(id);
             setTool("caption");
           }}
+          onPickTakeSegment={(id) => {
+            setSelectedTakeId(id);
+            setTool("take");
+          }}
           onClipContextMenu={openMenu}
           onTakeContextMenu={openTakeMenu}
-          onTakeTrim={(nextIn, nextOut) => {
-            setTakeIn(nextIn);
-            setTakeOut(nextOut);
-          }}
+          onTakeTrim={handleTakeTrim}
+          onTakeSegmentMove={handleTakeSegmentMove}
+          onTakeSegmentMoveCommit={handleTakeSegmentMoveCommit}
+          onClipMove={handleClipMove}
+          onClipMoveCommit={handleClipMoveCommit}
           onPxPerSecond={setPxPerSecond}
           onHeightRem={setTimelineH}
         />

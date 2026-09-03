@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { motion } from "motion/react";
 import {
+  BookmarkCheck,
   Captions,
   CircleUserRound,
   Film,
@@ -12,12 +13,10 @@ import {
 import { springSoft } from "@/lib/motion";
 
 /**
- * Encore's real tools. Deliberately no stickers / filters / transitions /
- * adjustment panels: the product's job is take → captioned cuts → post →
- * verdict, so the rail carries exactly those stops and nothing else. Beats are
- * detected and cut automatically on upload, so there's no manual "Moments" seat.
+ * Encore's real tools: take → moments review → captioned cuts → post →
+ * verdict. Standout beats are reviewed here (Keep / Skip) before becoming cuts.
  */
-export type ToolId = "take" | "cuts" | "caption" | "mind";
+export type ToolId = "take" | "moments" | "cuts" | "caption" | "mind";
 
 const TOOLS: {
   id: ToolId;
@@ -26,6 +25,7 @@ const TOOLS: {
   Icon: typeof Film;
 }[] = [
   { id: "take", label: "Take", title: "The long take", Icon: Film },
+  { id: "moments", label: "Moments", title: "Standout beats (keep or skip)", Icon: BookmarkCheck },
   { id: "cuts", label: "Cuts", title: "Cuts ready to ship", Icon: Scissors },
   { id: "caption", label: "Caption", title: "Title, caption, hashtags", Icon: Captions },
   { id: "mind", label: "Mind", title: "Talk to Encore", Icon: Sparkle },

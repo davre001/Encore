@@ -62,3 +62,44 @@ export type Video = {
   duration: number;
   createdAt: number;
 };
+
+export type TakeSegment = {
+  id: string;
+  title: string;
+  start: number;
+  end: number;
+  sourceStart?: number;
+  sourceEnd?: number;
+};
+
+export type ProjectEffects = {
+  rotate: number;
+  flip: boolean;
+  aspect: string;
+  aiOn?: boolean;
+  compareOn?: boolean;
+};
+
+export type ProjectState = {
+  id: string;
+  name: string;
+  videoId?: string | null;
+  mediaUrl?: string | null;
+  status: "draft" | "posted" | "checked";
+  /** Post outcome, persisted once a cut is published & checked. */
+  verdict?: "hit" | "mid" | "flop";
+  views?: number;
+  postUrl?: string;
+  postId?: string;
+  /** Timeline seconds the playhead was on when the project last saved. */
+  playhead?: number;
+  takeIn: number;
+  takeOut: number;
+  takeSegments: TakeSegment[];
+  clips: Clip[];
+  effects: ProjectEffects;
+  createdAt: number;
+  updatedAt: number;
+};
+
+

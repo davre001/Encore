@@ -85,7 +85,157 @@ class MessageCreate(CamelModel):
     text: str
 
 
+class ClipCreate(CamelModel):
+    """Create a cut from an arbitrary range of the take (manual editing tools).
+
+    Copy fields are optional: when the client already has a title/caption/tags
+    (every clip the editor mints does), they are used as-is; anything missing is
+    filled by the deterministic/Minds caption builder.
+    """
+
+    video_id: str
+    start: float
+    end: float
+    title: Optional[str] = None
+    caption: Optional[str] = None
+    hashtags: Optional[list[str]] = None
+    tags: Optional[list[str]] = None
+    moment_id: Optional[str] = None
+    label: Optional[str] = None
+
+
+class ClipUpdate(CamelModel):
+    """Patch an unposted clip's copy and/or trim; only sent fields change."""
+
+    title: Optional[str] = None
+    caption: Optional[str] = None
+    hashtags: Optional[list[str]] = None
+    tags: Optional[list[str]] = None
+    start: Optional[float] = None
+    end: Optional[float] = None
+
+
 # --- Small response envelopes ----------------------------------------------
 class PublishResult(CamelModel):
     post_id: str
     post_url: str
+
+
+# --- Auth schemas ----------------------------------------------------------
+class UserSignUp(CamelModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+
+class UserSignIn(CamelModel):
+    email: str
+    password: str
+
+
+class GoogleAuthRequest(CamelModel):
+    email: str
+    name: Optional[str] = None
+    picture: Optional[str] = None
+    sub: Optional[str] = None
+
+
+class UserResponse(CamelModel):
+    id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+    auth_provider: str = "local"
+    created_at: int
+
+
+class ForgotPasswordRequest(CamelModel):
+    email: str
+    confirm_email: str
+
+
+class ResetPasswordRequest(CamelModel):
+    email: str
+    code: str
+    new_password: str
+
+
+class MessageResponse(CamelModel):
+    message: str
+    status: str = "ok"
+
+
+# --- Project schemas -------------------------------------------------------
+class TakeSegmentSchema(CamelModel):
+    id: str
+    title: str
+    start: float
+    end: float
+    source_start: Optional[float] = None
+    source_end: Optional[float] = None
+
+
+class ProjectEffects(CamelModel):
+    rotate: int = 0
+    flip: bool = False
+    aspect: str = "16:9"
+    ai_on: bool = False
+    compare_on: bool = False
+
+
+class ProjectCreate(CamelModel):
+    id: Optional[str] = None
+    name: str = "Untitled"
+    video_id: Optional[str] = None
+    media_url: Optional[str] = None
+    status: str = "draft"
+    take_in: float = 0.0
+    take_out: float = 0.0
+    take_segments: list[TakeSegmentSchema] = []
+    clips: list[Clip] = []
+    effects: Optional[ProjectEffects] = None
+    verdict: Optional[Verdict] = None
+    views: Optional[int] = None
+    post_url: Optional[str] = None
+    post_id: Optional[str] = None
+    playhead: Optional[float] = None
+
+
+class ProjectUpdate(CamelModel):
+    name: Optional[str] = None
+    video_id: Optional[str] = None
+    media_url: Optional[str] = None
+    status: Optional[str] = None
+    take_in: Optional[float] = None
+    take_out: Optional[float] = None
+    take_segments: Optional[list[TakeSegmentSchema]] = None
+    clips: Optional[list[Clip]] = None
+    effects: Optional[ProjectEffects] = None
+    verdict: Optional[Verdict] = None
+    views: Optional[int] = None
+    post_url: Optional[str] = None
+    post_id: Optional[str] = None
+    playhead: Optional[float] = None
+
+
+class ProjectResponse(CamelModel):
+    id: str
+    name: str
+    video_id: Optional[str] = None
+    media_url: Optional[str] = None
+    status: str = "draft"
+    take_in: float = 0.0
+    take_out: float = 0.0
+    take_segments: list[TakeSegmentSchema] = []
+    clips: list[Clip] = []
+    effects: ProjectEffects = ProjectEffects()
+    verdict: Optional[Verdict] = None
+    views: Optional[int] = None
+    post_url: Optional[str] = None
+    post_id: Optional[str] = None
+    playhead: float = 0.0
+    created_at: int
+    updated_at: int
+
+
+

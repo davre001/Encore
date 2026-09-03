@@ -120,7 +120,32 @@ export function buildHistory(
     range: item.range,
   }));
 
-  return [...posted, ...drafts, ...unused]
+  // Real projects that have been posted and checked through the editor. Unlike
+  // the demo fixtures above, these carry a persisted verdict/views/url, so a
+  // creator's actual hits, mids, and flops show up in History with a Re-cut
+  // action. (Bare demo drafts stay drafts; only projects that truly have an
+  // outcome — verdict or url — surface here, so the fixtures aren't polluted.)
+  const realPosted: HistoryItem[] = projects
+    .filter(
+      (project) =>
+        (project.status === "posted" || project.status === "checked") &&
+        (project.verdict !== undefined || project.url !== undefined),
+    )
+    .map((project) => ({
+      id: project.id,
+      title: project.name,
+      source: `${project.clips} clips cut`,
+      category: "posted",
+      status: project.verdict ?? "posted",
+      updatedAt: project.updatedAt,
+      median: ANALYTICS_MEDIAN,
+      views: project.views,
+      verdict: project.verdict,
+      url: project.url,
+      clips: project.clips,
+    }));
+
+  return [...posted, ...realPosted, ...drafts, ...unused]
     .filter((item) => !overrides.hidden.includes(item.id))
     .map((item) =>
       overrides.renamed[item.id]

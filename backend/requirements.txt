@@ -5,6 +5,8 @@ python-multipart
 python-dotenv
 pydantic>=2
 httpx
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
 
 # Optional real integrations live in requirements-optional.txt so the server
 # runs (in deterministic-fallback mode) with just the core installed.

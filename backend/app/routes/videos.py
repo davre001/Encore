@@ -4,9 +4,16 @@ Upload persists the file, probes its real duration (ffprobe when present, else
 the 184s fallback), stores the Video, and kicks moment detection off in the
 background so the response returns immediately — GET /api/moments/{videoId}
 returns [] until the transcript + analysis land.
+
+GET /api/videos/{id}/file streams the original take so a resumed project can
+play from disk instead of a dead blob: URL.
 """
 
+import mimetypes
+import os
+
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
 from ..models.schemas import Video
 from .. import storage
@@ -61,3 +68,20 @@ async def get_video(video_id: str) -> Video:
     if record is None:
         raise HTTPException(status_code=404, detail="video not found")
     return Video.model_validate(record)
+
+
+@router.get("/{video_id}/file")
+async def get_video_file(video_id: str) -> FileResponse:
+    """Serve the original uploaded take so the editor can resume playback."""
+    record = storage.get_video(video_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="video not found")
+    src_path = record.get("srcPath")
+    if not src_path or not os.path.isfile(src_path):
+        raise HTTPException(status_code=404, detail="video file not found")
+    media_type = mimetypes.guess_type(src_path)[0] or "video/mp4"
+    return FileResponse(
+        src_path,
+        media_type=media_type,
+        content_disposition_type="inline",
+    )
