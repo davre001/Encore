@@ -1,4 +1,10 @@
+# Core — everything needed to boot the API and pass the smoke test.
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
 python-dotenv
+pydantic>=2
+httpx
+
+# Optional real integrations live in requirements-optional.txt so the server
+# runs (in deterministic-fallback mode) with just the core installed.

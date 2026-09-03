@@ -1,0 +1,20 @@
+# Optional integrations — install to light up the real pipeline. Each is
+# capability-gated: absent, the matching service falls back deterministically
+# and the server still boots. Install alongside the core (requirements.txt).
+#
+#   pip install -r requirements.txt -r requirements-optional.txt
+#
+# Also requires the ffmpeg + ffprobe binaries on PATH for real rendering and
+# for whisper audio decoding (install separately, e.g. `winget install ffmpeg`).
+
+# Transcription (CTranslate2 backend — no torch needed).
+faster-whisper
+
+# Minds (MindsDB) agent SDK. Import root: `minds`.
+minds-sdk
+
+# YouTube Data API publish + stats.
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
