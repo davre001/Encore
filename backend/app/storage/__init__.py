@@ -197,6 +197,13 @@ def list_messages(video_id: str) -> list[dict]:
     return _list_by("messages", "videoId", video_id)
 
 
+def clear_messages(video_id: str) -> None:
+    with _LOCK:
+        rows = _read("messages")
+        new_rows = [r for r in rows if r.get("videoId") != video_id]
+        _write("messages", new_rows)
+
+
 # --- playbook (persistent taste memory) ------------------------------------
 def read_playbook() -> list[dict]:
     with _LOCK:

@@ -22,9 +22,15 @@ UPLOAD_DIR = _resolve(os.getenv("UPLOAD_DIR", "../uploads"))
 DATA_DIR = _resolve(os.getenv("DATA_DIR", "../data"))
 
 # --- Credentials (empty string = not configured) ---------------------------
-MINDS_BUILDER_API_KEY = os.getenv("MINDS_BUILDER_API_KEY", "")
-MINDS_ID = os.getenv("MINDS_ID", "")
-MINDS_BASE_URL = os.getenv("MINDS_BASE_URL", "")  # empty → Minds Cloud default
+# Minds by Animoca Brands — Builder API. The key is a JWT minted at
+# build.hellominds.ai; MINDS_ID pins one Mind (else the account's first enabled
+# Mind is used), and MINDS_ALIAS names the conversation Encore talks through.
+MINDS_BUILDER_API_KEY = os.getenv("MINDS_BUILDER_API_KEY", "").strip()
+MINDS_ID = os.getenv("MINDS_ID", "").strip()
+MINDS_BASE_URL = os.getenv("MINDS_BASE_URL", "").strip()  # empty → api.build.hellominds.ai
+MINDS_ALIAS = os.getenv("MINDS_ALIAS", "encore-notebook").strip()
+# A Mind replies asynchronously, so a send is followed by polling its history.
+MINDS_REPLY_TIMEOUT = float(os.getenv("MINDS_REPLY_TIMEOUT", "120"))
 YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET", "")
 YOUTUBE_REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN", "")
@@ -79,7 +85,9 @@ def capabilities() -> dict[str, bool]:
         "ffprobe": ffprobe,
         # faster-whisper decodes audio through ffmpeg, so it needs both.
         "whisper": _has_module("faster_whisper") and ffmpeg,
-        "minds": bool(MINDS_BUILDER_API_KEY) and _has_module("minds"),
+        # Minds talks plain HTTP through httpx (a core dep), so the key is the
+        # only gate — there is no Python SDK for the Animoca Builder API.
+        "minds": bool(MINDS_BUILDER_API_KEY),
         "youtube": bool(
             YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET and YOUTUBE_REFRESH_TOKEN
         )

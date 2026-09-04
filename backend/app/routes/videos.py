@@ -1,20 +1,13 @@
-"""Video upload + fetch.
-
-Upload persists the file, probes its real duration (ffprobe when present, else
-the 184s fallback), stores the Video, and kicks moment detection off in the
-background so the response returns immediately — GET /api/moments/{videoId}
-returns [] until the transcript + analysis land.
-
-GET /api/videos/{id}/file streams the original take so a resumed project can
-play from disk instead of a dead blob: URL.
-"""
+"""Video upload + fetch — tags every video with the uploading user's id."""
 
 import mimetypes
 import os
+from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from ..dependencies import get_user_id
 from ..models.schemas import Video
 from .. import storage
 from ..services import analyze, ffmpeg, transcribe
@@ -33,7 +26,11 @@ def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
 
 
 @router.post("", response_model=Video)
-async def upload_video(file: UploadFile, background_tasks: BackgroundTasks) -> Video:
+async def upload_video(
+    file: UploadFile,
+    background_tasks: BackgroundTasks,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> Video:
     src_path = storage.save_upload(file)
     duration = ffmpeg.probe_duration(src_path)
 
@@ -44,10 +41,10 @@ async def upload_video(file: UploadFile, background_tasks: BackgroundTasks) -> V
         created_at=storage.now_ms(),
     )
     record = video.model_dump(by_alias=True)
-    record["srcPath"] = src_path  # internal; dropped by the Video model on read
+    record["srcPath"] = src_path
+    record["userId"] = user_id          # tag with owner
     storage.save_video(record)
 
-    # Seed the notebook with the same line the frontend shows post-upload.
     storage.save_message(
         {
             "id": storage.new_id("msg"),
@@ -55,6 +52,7 @@ async def upload_video(file: UploadFile, background_tasks: BackgroundTasks) -> V
             "text": "Watching the tape and cutting the beats that stand alone…",
             "createdAt": storage.now_ms(),
             "videoId": video.id,
+            "userId": user_id,
         }
     )
 
@@ -63,18 +61,29 @@ async def upload_video(file: UploadFile, background_tasks: BackgroundTasks) -> V
 
 
 @router.get("/{video_id}", response_model=Video)
-async def get_video(video_id: str) -> Video:
+async def get_video(
+    video_id: str,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> Video:
     record = storage.get_video(video_id)
     if record is None:
+        raise HTTPException(status_code=404, detail="video not found")
+    # Enforce ownership only when both sides have a userId set
+    if user_id and record.get("userId") and record["userId"] != user_id:
         raise HTTPException(status_code=404, detail="video not found")
     return Video.model_validate(record)
 
 
 @router.get("/{video_id}/file")
-async def get_video_file(video_id: str) -> FileResponse:
+async def get_video_file(
+    video_id: str,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> FileResponse:
     """Serve the original uploaded take so the editor can resume playback."""
     record = storage.get_video(video_id)
     if record is None:
+        raise HTTPException(status_code=404, detail="video not found")
+    if user_id and record.get("userId") and record["userId"] != user_id:
         raise HTTPException(status_code=404, detail="video not found")
     src_path = record.get("srcPath")
     if not src_path or not os.path.isfile(src_path):

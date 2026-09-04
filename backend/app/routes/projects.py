@@ -1,9 +1,4 @@
-"""Projects and history management for Encore.
-
-Persists user edits (take segments, split/trim points, clips, effects like rotate/flip/aspect)
-and powers the project history. Supports auto-save from the editor so the user never
-loses their progress.
-"""
+"""Projects and history management for Encore — per-user isolated."""
 
 import json
 from typing import Optional
@@ -11,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from ..dependencies import get_user_id
 from ..models.user import Project as DBProject
 from ..models.schemas import (
     ProjectCreate,
@@ -68,13 +64,14 @@ def _db_to_response(db_proj: DBProject) -> ProjectResponse:
 
 @router.post("", response_model=ProjectResponse)
 def save_or_create_project(
-    payload: ProjectCreate, db: Session = Depends(get_db)
+    payload: ProjectCreate,
+    db: Session = Depends(get_db),
+    user_id: Optional[str] = Depends(get_user_id),
 ) -> ProjectResponse:
-    """Create or upsert a user project with its take segments, cuts, and effects."""
+    """Create or upsert a user project — scoped to the authenticated user."""
     now = storage.now_ms()
     proj_id = payload.id or storage.new_id("proj")
 
-    # Serialize JSON fields
     take_segs_json = json.dumps(
         [s.model_dump(by_alias=True) for s in payload.take_segments]
     )
@@ -83,9 +80,11 @@ def save_or_create_project(
         payload.effects.model_dump(by_alias=True) if payload.effects else {}
     )
 
-    # 1. Try DB first
     try:
-        existing = db.query(DBProject).filter(DBProject.id == proj_id).first()
+        q = db.query(DBProject).filter(DBProject.id == proj_id)
+        if user_id:
+            q = q.filter(DBProject.user_id == user_id)
+        existing = q.first()
         if existing:
             existing.name = payload.name
             existing.video_id = payload.video_id
@@ -105,10 +104,11 @@ def save_or_create_project(
             existing.updated_at = now
             db.commit()
             db.refresh(existing)
-            res = _db_to_response(existing)
+            return _db_to_response(existing)
         else:
             db_proj = DBProject(
                 id=proj_id,
+                user_id=user_id,
                 name=payload.name,
                 video_id=payload.video_id,
                 media_url=payload.media_url,
@@ -129,14 +129,14 @@ def save_or_create_project(
             db.add(db_proj)
             db.commit()
             db.refresh(db_proj)
-            res = _db_to_response(db_proj)
+            return _db_to_response(db_proj)
     except Exception:
         db.rollback()
-        res = None
 
-    # 2. Also keep in JSON storage so both storage modes stay synced
+    # Fallback: JSON storage keyed by user
     storage_dict = {
         "id": proj_id,
+        "userId": user_id,
         "name": payload.name,
         "videoId": payload.video_id,
         "mediaUrl": payload.media_url,
@@ -160,44 +160,53 @@ def save_or_create_project(
     else:
         storage.save_project(storage_dict)
 
-    if res is not None:
-        return res
-
     return ProjectResponse.model_validate(storage_dict)
 
 
 @router.get("", response_model=list[ProjectResponse])
-def list_projects(db: Session = Depends(get_db)) -> list[ProjectResponse]:
-    """List all projects for history, ordered by most recently updated first."""
-    # 1. Try DB
+def list_projects(
+    db: Session = Depends(get_db),
+    user_id: Optional[str] = Depends(get_user_id),
+) -> list[ProjectResponse]:
+    """List projects for this user only, ordered by most recently updated."""
     try:
-        db_projs = (
-            db.query(DBProject).order_by(DBProject.updated_at.desc()).all()
-        )
+        q = db.query(DBProject)
+        if user_id:
+            q = q.filter(DBProject.user_id == user_id)
+        db_projs = q.order_by(DBProject.updated_at.desc()).all()
         if db_projs:
             return [_db_to_response(p) for p in db_projs]
     except Exception:
         pass
 
-    # 2. Fallback to storage
+    # Fallback: filter JSON store by userId
     stored = storage.list_projects()
+    if user_id:
+        stored = [p for p in stored if p.get("userId") == user_id]
     return [ProjectResponse.model_validate(p) for p in stored]
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
-def get_project(project_id: str, db: Session = Depends(get_db)) -> ProjectResponse:
-    """Get a single project by ID."""
-    # 1. Try DB
+def get_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    user_id: Optional[str] = Depends(get_user_id),
+) -> ProjectResponse:
+    """Get a single project — only if it belongs to this user."""
     try:
-        db_proj = db.query(DBProject).filter(DBProject.id == project_id).first()
+        q = db.query(DBProject).filter(DBProject.id == project_id)
+        if user_id:
+            q = q.filter(DBProject.user_id == user_id)
+        db_proj = q.first()
         if db_proj:
             return _db_to_response(db_proj)
     except Exception:
         pass
 
-    # 2. Fallback to storage
     stored = storage.get_project(project_id)
     if not stored:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if user_id and stored.get("userId") and stored["userId"] != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
     return ProjectResponse.model_validate(stored)
 
@@ -205,9 +214,12 @@ def get_project(project_id: str, db: Session = Depends(get_db)) -> ProjectRespon
 @router.patch("/{project_id}", response_model=ProjectResponse)
 @router.put("/{project_id}", response_model=ProjectResponse)
 def update_project(
-    project_id: str, payload: ProjectUpdate, db: Session = Depends(get_db)
+    project_id: str,
+    payload: ProjectUpdate,
+    db: Session = Depends(get_db),
+    user_id: Optional[str] = Depends(get_user_id),
 ) -> ProjectResponse:
-    """Update / auto-save an existing project."""
+    """Update / auto-save — only if the project belongs to this user."""
     now = storage.now_ms()
     patch: dict = {"updatedAt": now}
 
@@ -242,9 +254,11 @@ def update_project(
     if payload.effects is not None:
         patch["effects"] = payload.effects.model_dump(by_alias=True)
 
-    # 1. Try DB
     try:
-        db_proj = db.query(DBProject).filter(DBProject.id == project_id).first()
+        q = db.query(DBProject).filter(DBProject.id == project_id)
+        if user_id:
+            q = q.filter(DBProject.user_id == user_id)
+        db_proj = q.first()
         if db_proj:
             if payload.name is not None:
                 db_proj.name = payload.name
@@ -282,12 +296,11 @@ def update_project(
     except Exception:
         db.rollback()
 
-    # 2. Fallback to storage
     updated = storage.update_project(project_id, patch)
     if not updated:
-        # If project did not exist in storage yet, create it
         full_dict = {
             "id": project_id,
+            "userId": user_id,
             "name": payload.name or "Untitled",
             "videoId": payload.video_id,
             "mediaUrl": payload.media_url,
@@ -313,12 +326,17 @@ def update_project(
 
 @router.delete("/{project_id}", response_model=MessageResponse)
 def delete_project(
-    project_id: str, db: Session = Depends(get_db)
+    project_id: str,
+    db: Session = Depends(get_db),
+    user_id: Optional[str] = Depends(get_user_id),
 ) -> MessageResponse:
-    """Delete a project from history."""
+    """Delete a project — only if it belongs to this user."""
     deleted = False
     try:
-        db_proj = db.query(DBProject).filter(DBProject.id == project_id).first()
+        q = db.query(DBProject).filter(DBProject.id == project_id)
+        if user_id:
+            q = q.filter(DBProject.user_id == user_id)
+        db_proj = q.first()
         if db_proj:
             db.delete(db_proj)
             db.commit()

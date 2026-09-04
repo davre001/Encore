@@ -103,7 +103,12 @@ def find_moments(video_id: str, duration: float, transcript: list[dict]) -> list
     """Propose pending moments for a video. Always returns at least the beats."""
     span = _span(duration)
 
-    if transcript and minds.available():
+    # 1. Non-verbal or empty audio: immediately use positional beats without polling or prompt
+    if not transcript or not minds.is_meaningful_speech(transcript):
+        return _from_beats(video_id, span)
+
+    # 2. Real dialogue: attempt AI proposal first
+    if minds.available():
         proposed = minds.propose_moments(transcript, span)
         if proposed:
             return [
@@ -111,9 +116,9 @@ def find_moments(video_id: str, duration: float, transcript: list[dict]) -> list
                 for p in proposed
             ]
 
-    if transcript:
-        from_tx = _from_transcript(video_id, transcript, span)
-        if from_tx:
-            return from_tx
+    # 3. Speech keyword alignment
+    from_tx = _from_transcript(video_id, transcript, span)
+    if from_tx:
+        return from_tx
 
     return _from_beats(video_id, span)

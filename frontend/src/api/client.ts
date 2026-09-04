@@ -1,8 +1,12 @@
 import type {
+  AnalyticsData,
   Clip,
   Decision,
   Message,
+  MindMemory,
+  MindTransport,
   Moment,
+  PlaybookRow,
   PostCheck,
   ProjectState,
   User,
@@ -142,8 +146,13 @@ export async function listMessages(videoId: string): Promise<Message[]> {
   const res = await fetch(`${API}/messages/${encodeURIComponent(videoId)}`);
   return handleResponse<Message[]>(res);
 }
+export const getMessages = listMessages;
 
-/** Send a chat message to the Mind and receive its reply. */
+/** Send a chat message to the Mind and receive its reply.
+ *
+ * A wired Mind answers asynchronously, so the response can be a `pending`
+ * placeholder — follow it with `waitForMindReply` to pick up the real answer.
+ */
 export async function sendMessage(
   videoId: string,
   text: string
@@ -156,15 +165,56 @@ export async function sendMessage(
   return handleResponse<Message>(res);
 }
 
+/** Poll notebook history until the Mind's reply lands, or give up (null).
+ *
+ * `since` is the placeholder's server-side createdAt, so the comparison is free
+ * of client clock skew. Transient failures keep polling until the deadline.
+ */
+export async function waitForMindReply(
+  videoId: string,
+  since: number,
+  opts: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<Message | null> {
+  const timeoutMs = opts.timeoutMs ?? 180_000;
+  const intervalMs = opts.intervalMs ?? 2_000;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    try {
+      const history = await listMessages(videoId);
+      const replies = history.filter(
+        (m) => m.role === "mind" && m.createdAt >= since
+      );
+      if (replies.length > 0) return replies[replies.length - 1];
+    } catch {
+      // Keep polling — a dropped request should not end the wait.
+    }
+  }
+  return null;
+}
+
 /** Check backend health and capabilities. */
 export async function getHealth(): Promise<{
   status: string;
-  capabilities: Record<string, boolean>;
+  capabilities: {
+    ffmpeg: boolean;
+    ffprobe: boolean;
+    whisper: boolean;
+    minds: boolean;
+    youtube: boolean;
+  };
 }> {
   const res = await fetch(`${API}/health`);
   return handleResponse<{
     status: string;
-    capabilities: Record<string, boolean>;
+    capabilities: {
+      ffmpeg: boolean;
+      ffprobe: boolean;
+      whisper: boolean;
+      minds: boolean;
+      youtube: boolean;
+    };
   }>(res);
 }
 
@@ -286,6 +336,79 @@ export async function deleteProject(
     method: "DELETE",
   });
   return handleResponse<{ message: string; status: string }>(res);
+}
+
+/* =========================================================================
+   ANALYTICS & PLAYBOOK (Real creator data)
+   ========================================================================= */
+
+/** Get real creator analytics, summary, and playbook rules. */
+export async function getAnalytics(): Promise<AnalyticsData> {
+  const res = await fetch(`${API}/analytics`);
+  return handleResponse<AnalyticsData>(res);
+}
+
+/** Get creator playbook rules. */
+export async function getPlaybook(): Promise<PlaybookRow[]> {
+  const res = await fetch(`${API}/analytics/playbook`);
+  return handleResponse<PlaybookRow[]>(res);
+}
+
+/** Update or add a creator playbook rule. */
+export async function updatePlaybookRule(rule: PlaybookRow): Promise<PlaybookRow> {
+  const res = await fetch(`${API}/analytics/playbook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rule),
+  });
+  return handleResponse<PlaybookRow>(res);
+}
+
+/* =========================================================================
+   MINDS & PERSISTENT MEMORY
+   ========================================================================= */
+
+/** Get persistent memories for creator tenets, rules, and learned preferences. */
+export async function getMindMemories(category?: string): Promise<MindMemory[]> {
+  const qs = category ? `?category=${encodeURIComponent(category)}` : "";
+  const res = await fetch(`${API}/mind/memories${qs}`);
+  return handleResponse<MindMemory[]>(res);
+}
+
+/** Add or update a standing tenet or preference in persistent memory. */
+export async function addMindMemory(input: {
+  category: string;
+  content: string;
+  key?: string;
+  metadataJson?: string;
+}): Promise<MindMemory> {
+  const res = await fetch(`${API}/mind/memories`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return handleResponse<MindMemory>(res);
+}
+
+/** Delete a memory from persistent storage. */
+export async function deleteMindMemory(id: string): Promise<{ status: string }> {
+  const res = await fetch(`${API}/mind/memories/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  return handleResponse<{ status: string }>(res);
+}
+
+/** Get status of MindsDB integration and persistent memory. */
+export async function getMindStatus(): Promise<{
+  status: string;
+  mindsAvailable: boolean;
+  persistentMemoryEnabled: boolean;
+  memoriesCount: number;
+  /** Live Builder API diagnostics; null when no key is configured. */
+  transport: MindTransport | null;
+}> {
+  const res = await fetch(`${API}/mind/status`);
+  return handleResponse<any>(res);
 }
 
 

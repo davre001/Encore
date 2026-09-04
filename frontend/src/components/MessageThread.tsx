@@ -51,7 +51,7 @@ export default function MessageThread({
               <motion.div
                 key={message.id}
                 layout
-                className={`bubble bubble--${message.role === "mind" ? "mind" : "you"}`}
+                className={`bubble bubble--${message.role === "mind" ? "mind" : "you"}${message.pending ? " thread__typing" : ""}`}
                 initial={{
                   opacity: 0,
                   y: 10,
@@ -64,6 +64,13 @@ export default function MessageThread({
                   {message.role === "mind" ? "Encore" : "You"}
                 </span>
                 {message.text}
+                {message.pending ? (
+                  <span className="thread__dots" aria-label="Encore is thinking">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                ) : null}
               </motion.div>
             ))}
           </AnimatePresence>

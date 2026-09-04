@@ -19,7 +19,17 @@ from fastapi.responses import RedirectResponse
 from .config import CORS_ORIGINS, capabilities
 from . import storage
 from .db import init_db
-from .routes import auth, clips, messages, moments, posts, projects, videos
+from .routes import (
+    analytics,
+    auth,
+    clips,
+    messages,
+    mind,
+    moments,
+    posts,
+    projects,
+    videos,
+)
 
 
 @asynccontextmanager
@@ -73,3 +83,5 @@ app.include_router(clips.router, prefix="/api/clips", tags=["clips"])
 app.include_router(posts.router, prefix="/api/posts", tags=["posts"])
 app.include_router(messages.router, prefix="/api/messages", tags=["messages"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
+app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
+app.include_router(mind.router, prefix="/api/mind", tags=["mind"])

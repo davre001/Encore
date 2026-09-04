@@ -36,20 +36,20 @@ def signup(body: UserSignUp, db: Session = Depends(get_db)) -> UserResponse:
             detail="A valid email address is required.",
         )
 
-    # 1. Check for existing account with the same email
-    existing = db.query(User).filter(User.email == email).first()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="An account already exists with this email address. Please sign in instead.",
-        )
-
-    # 2. Check password strength (length, uppercase, lowercase, numbers, symbols)
+    # 1. Check password strength (length, uppercase, lowercase, numbers, symbols)
     valid, message = validate_password_strength(body.password)
     if not valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=message,
+        )
+
+    # 2. Check for existing account with the same email
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account already exists with this email address. Please sign in instead.",
         )
 
     # Determine user display name

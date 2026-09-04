@@ -54,6 +54,24 @@ export type Message = {
   role: "mind" | "you";
   text: string;
   createdAt: number;
+  /**
+   * Placeholder returned while a live Mind composes its answer. Minds by
+   * Animoca Brands replies asynchronously, so the real reply arrives in history
+   * later — poll `waitForMindReply` and swap this row out.
+   */
+  pending?: boolean;
+};
+
+/** Live wiring state of the Minds (Animoca Builder API) transport. */
+export type MindTransport = {
+  baseUrl: string;
+  keyConfigured: boolean;
+  humanId: boolean;
+  alias: string;
+  mindId: string | null;
+  reachable: boolean;
+  mindsCount: number;
+  error: string | null;
 };
 
 export type Video = {
@@ -100,6 +118,52 @@ export type ProjectState = {
   effects: ProjectEffects;
   createdAt: number;
   updatedAt: number;
+};
+
+export type MindMemory = {
+  id: string;
+  userId?: string | null;
+  category: string;
+  key?: string | null;
+  content: string;
+  metadataJson?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type PlaybookRow = {
+  id?: string;
+  style: string;
+  sample: number;
+  hitRate: number;
+  note: string;
+  locked?: boolean;
+};
+
+export type AnalyticsPostItem = {
+  id: string;
+  day: string;
+  title: string;
+  hook: string;
+  views: number;
+  verdict: "hit" | "mid" | "flop";
+  url?: string | null;
+};
+
+export type AnalyticsSummary = {
+  posts: number;
+  totalViews: number;
+  median: number;
+  hitRate: number;
+  hits: number;
+  flops: number;
+  mids: number;
+};
+
+export type AnalyticsData = {
+  posts: AnalyticsPostItem[];
+  summary: AnalyticsSummary;
+  playbook: PlaybookRow[];
 };
 
 

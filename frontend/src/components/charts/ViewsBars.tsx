@@ -3,10 +3,15 @@
 import { motion } from "motion/react";
 import { DUR, EASE, VIEWPORT } from "@/lib/motion";
 import { useReducedMotionSafe } from "@/components/motion/useReducedMotionSafe";
-import { daySeries, type AnalyticsPost } from "@/lib/mockAnalytics";
+type PostItem = {
+  id?: string;
+  day: string;
+  views: number;
+  verdict?: "hit" | "mid" | "flop";
+};
 
 type ViewsBarsProps = {
-  posts: AnalyticsPost[];
+  posts: PostItem[];
   median: number;
 };
 
@@ -16,6 +21,7 @@ const PAD = { top: 40, right: 14, bottom: 30, left: 48 };
 
 /** Rounds up to a readable axis maximum (4200 -> 5000, 15100 -> 16000). */
 function niceMax(value: number) {
+  if (value <= 0) return 1000;
   const step = Math.pow(10, Math.floor(Math.log10(value))) / 2;
   return Math.ceil(value / step) * step;
 }
@@ -31,7 +37,26 @@ function short(value: number) {
  */
 export default function ViewsBars({ posts, median }: ViewsBarsProps) {
   const reduced = useReducedMotionSafe();
-  const series = daySeries(posts);
+
+  if (!posts || posts.length === 0) {
+    return (
+      <div
+        className="chart-empty"
+        style={{
+          padding: "54px 24px",
+          textAlign: "center",
+          color: "var(--text-muted, #888)",
+        }}
+      >
+        <p style={{ fontWeight: 500, fontSize: "0.95rem" }}>No published posts yet</p>
+        <p style={{ fontSize: "0.85rem", marginTop: 6, opacity: 0.8 }}>
+          Post cuts or connect your YouTube channel to see views compared against your median.
+        </p>
+      </div>
+    );
+  }
+
+  const series = posts.map((p) => ({ day: p.day, views: p.views }));
 
   const total = series.reduce((sum, point) => sum + point.views, 0);
   const top = niceMax(Math.max(...series.map((p) => p.views), median));

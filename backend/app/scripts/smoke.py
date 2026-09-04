@@ -20,6 +20,13 @@ _TMP = tempfile.mkdtemp(prefix="encore_smoke_")
 os.environ["DATA_DIR"] = os.path.join(_TMP, "data")
 os.environ["UPLOAD_DIR"] = os.path.join(_TMP, "uploads")
 
+# Force the deterministic path even when .env holds a real Builder API key. The
+# suite must stay hermetic: a live Mind would bill the creator's account and
+# block for MINDS_REPLY_TIMEOUT per prompt. An empty value still counts as "set"
+# to load_dotenv, so it is not overridden. The adapter itself is covered offline
+# in _check_minds_adapter / _check_json_extraction.
+os.environ["MINDS_BUILDER_API_KEY"] = ""
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
@@ -32,6 +39,253 @@ def check(label: str, cond: bool, detail: str = "") -> None:
     print(f"  [{mark}] {label}" + (f" — {detail}" if detail and not cond else ""))
     if not cond:
         FAILS.append(label)
+
+
+def _check_json_extraction() -> None:
+    """A Mind answers in sentences, so JSON must survive being wrapped in prose.
+
+    The refusal case matters as much as the parse cases: when the Mind declines
+    the format outright, extraction must return None so the caller drops to its
+    deterministic path instead of raising.
+    """
+    from app.services.minds import _extract_json
+
+    moment = {"start": 3.0, "end": 9.5, "label": "The confession", "reason": "opens cold"}
+    body = (
+        '[{"start": 3.0, "end": 9.5, "label": "The confession", '
+        '"reason": "opens cold"}]'
+    )
+
+    cases = [
+        ("bare array parses", body, list, [moment]),
+        ("fenced json parses", f"```json\n{body}\n```", list, [moment]),
+        ("prose before the array", f"Sure, one stands alone:\n\n{body}\n\nCut it?", list, [moment]),
+        ("array mid-sentence", f"The best beat is {body} and I would trim the tail.", list, [moment]),
+        ("apostrophes in the prose", f"Here's what I'd keep (it's strongest): {body}", list, [moment]),
+        (
+            "bracket inside a string value",
+            '[{"start": 3.0, "end": 9.5, "label": "The [real] confession", "reason": "opens cold"}]',
+            list,
+            [{**moment, "label": "The [real] confession"}],
+        ),
+        (
+            "a flat refusal yields no JSON",
+            "I haven't watched it. The transcript is just [0.0-10.0] Music. I won't fake it.",
+            list,
+            None,
+        ),
+        (
+            "a stray tag array does not shadow the object",
+            'Tags: ["#rant"]. Copy:\n{"title": "I panicked", "caption": "the exam story"}',
+            dict,
+            {"title": "I panicked", "caption": "the exam story"},
+        ),
+        ("wrong shape is rejected", '{"title": "nope"}', list, None),
+        ("truncated JSON is rejected", 'here you go: [{"start": 3.0, "end":', list, None),
+    ]
+    for label, raw, want, expect in cases:
+        got = _extract_json(raw, want=want)
+        check(label, got == expect, f"got {got!r}")
+
+
+def _check_minds_adapter() -> None:
+    """Minds Builder API adapter, exercised without a key or a network.
+
+    The live round trip needs MINDS_BUILDER_API_KEY, so what is provable offline
+    is the wire contract itself: JWT claim extraction, reply attribution, the
+    409 retry, error-envelope parsing, and the poll deadline.
+    """
+    import base64
+    import json
+
+    from app.services import minds_api as ma
+
+    check(
+        "minds base URL defaults to the Animoca build host",
+        ma.base_url() == "https://api.build.hellominds.ai",
+        ma.base_url(),
+    )
+    check("no key means no humanId", ma.human_id() is None)
+
+    # The Builder API key is a JWT; humanId comes out of its payload.
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"humanId": "human_smoke_1"}).encode()
+    ).decode().rstrip("=")
+    original_key = ma.MINDS_BUILDER_API_KEY
+    ma.MINDS_BUILDER_API_KEY = f"hdr.{payload}.sig"
+    try:
+        check(
+            "humanId decoded from the key's JWT payload",
+            ma.human_id() == "human_smoke_1",
+            str(ma.human_id()),
+        )
+        check("a non-JWT key yields no humanId", _human_id_of(ma, "not-a-jwt") is None)
+    finally:
+        ma.MINDS_BUILDER_API_KEY = original_key
+
+    # Reply attribution: senderType 1 (and "You") is us, 0 and 2 are the Mind.
+    alias = "encore-notebook"
+    mind_row = {"messageText": "Cut the greeting.", "senderType": 2, "fingerprint": "b"}
+    check("Mind row is a reply", ma.is_mind_reply(mind_row, alias=alias))
+    check(
+        "system row (senderType 0) is a reply",
+        ma.is_mind_reply({"messageText": "hi", "senderType": 0}, alias=alias),
+    )
+    check(
+        "row with only a mindId is a reply",
+        ma.is_mind_reply({"messageText": "hi", "mindId": "m_1"}, alias=alias),
+    )
+    check(
+        "our own turn is not a reply",
+        not ma.is_mind_reply({"messageText": "hi", "senderType": 1}, alias=alias),
+    )
+    check(
+        "senderName 'You' is not a reply",
+        not ma.is_mind_reply({"messageText": "hi", "senderName": "You"}, alias=alias),
+    )
+    check(
+        "empty text is not a reply",
+        not ma.is_mind_reply({"messageText": "  ", "senderType": 2}, alias=alias),
+    )
+    check(
+        "echo of what we sent is not a reply",
+        not ma.is_mind_reply(mind_row, alias=alias, sent_text="Cut the greeting."),
+    )
+    check(
+        "another alias' row is not a reply",
+        not ma.is_mind_reply(
+            {"messageText": "hi", "senderType": 2, "alias": "other"}, alias=alias
+        ),
+    )
+    check(
+        "row at/behind the fingerprint mark is not a reply",
+        not ma.is_mind_reply(mind_row, alias=alias, after_fingerprint="b"),
+    )
+    check(
+        "row past the fingerprint mark is a reply",
+        ma.is_mind_reply(mind_row, alias=alias, after_fingerprint="a"),
+    )
+    check(
+        "partyType is read as senderType",
+        ma.is_mind_reply({"messageText": "hi", "partyType": 2}, alias=alias),
+    )
+
+    _check_minds_transport(ma)
+
+    probe = ma.probe()
+    check("probe reports the key as missing", probe.get("keyConfigured") is False)
+    check("probe stays unreachable without a key", probe.get("reachable") is False)
+    check("probe explains why", bool(probe.get("error")), str(probe))
+
+
+def _human_id_of(ma, key: str):
+    """human_id() for an arbitrary key, restoring the module global after."""
+    original = ma.MINDS_BUILDER_API_KEY
+    ma.MINDS_BUILDER_API_KEY = key
+    try:
+        return ma.human_id()
+    finally:
+        ma.MINDS_BUILDER_API_KEY = original
+
+
+def _check_minds_transport(ma) -> None:
+    """Retry, error parsing, polling and the full ask() — transport stubbed out."""
+    import httpx
+
+    # Error envelope: {"error": {"type", "subType", "message"}}.
+    resp = httpx.Response(
+        401,
+        json={
+            "method": "POST",
+            "url": "/v1/messaging/message",
+            "error": {
+                "extraInfo": [],
+                "type": "AUTH_FAILED",
+                "subType": "UNKNOWN_ERROR",
+                "message": "Invalid or expired access key",
+            },
+        },
+        request=httpx.Request("POST", "https://api.build.hellominds.ai/v1/x"),
+    )
+    err = ma._error_from("POST", "/v1/messaging/message", resp)
+    check("error envelope keeps the status", err.status == 401, str(err.status))
+    check("error envelope keeps the type", err.err_type == "AUTH_FAILED", str(err.err_type))
+    check("error envelope keeps the subType", err.sub_type == "UNKNOWN_ERROR")
+    check("error message surfaces the API's own words", "Invalid or expired" in str(err))
+
+    original_request = ma._request
+    original_history = ma.get_history
+    calls: list[tuple] = []
+
+    def busy_twice(method, path, *, json_body=None, params=None, timeout=None):
+        calls.append((method, path))
+        if len(calls) <= 2:
+            raise ma.MindsError("busy", status=409)
+        return {"ok": True}
+
+    ma._request = busy_twice
+    try:
+        sent = ma.send_message("encore-notebook", "hello")
+        check("send retries through a 409 and lands", sent == {"ok": True}, str(sent))
+        check("send retried exactly twice", len(calls) == 3, str(len(calls)))
+
+        calls.clear()
+
+        def always_busy(method, path, *, json_body=None, params=None, timeout=None):
+            calls.append((method, path))
+            raise ma.MindsError("busy", status=409)
+
+        ma._request = always_busy
+        try:
+            ma.send_message("encore-notebook", "hello")
+            check("a permanently busy send raises", False, "no MindsError")
+        except ma.MindsError:
+            check("a permanently busy send raises", True)
+        check("send gives up after the backoff", len(calls) == 4, str(len(calls)))
+    finally:
+        ma._request = original_request
+
+    # Polling: nothing in history means no reply, and the deadline is honoured.
+    ma.get_history = lambda alias, limit=50, before=None: []
+    try:
+        check(
+            "an empty history times out to None",
+            ma.wait_for_reply("encore-notebook", timeout_s=0) is None,
+        )
+        ma.get_history = lambda alias, limit=50, before=None: [
+            {"messageText": "Open on the confession.", "senderType": 2, "fingerprint": "z"}
+        ]
+        check(
+            "the Mind's row is picked out of history",
+            ma.wait_for_reply("encore-notebook", timeout_s=0)
+            == "Open on the confession.",
+        )
+
+        # Full round trip: resolve → ensure conversation → send → poll.
+        seen: dict = {}
+        original_resolve = ma.resolve_mind_id
+        original_ensure = ma.ensure_conversation
+        original_latest = ma.latest_fingerprint
+        original_send = ma.send_message
+        ma.resolve_mind_id = lambda refresh=False: "mind_smoke_1"
+        ma.ensure_conversation = lambda alias, mind_id: seen.update(
+            {"alias": alias, "mindId": mind_id}
+        )
+        ma.latest_fingerprint = lambda alias: "y"
+        ma.send_message = lambda alias, text: seen.update({"sent": text}) or {}
+        try:
+            reply = ma.ask("what should I cut?", timeout_s=0)
+            check("ask() returns the Mind's reply", reply == "Open on the confession.", str(reply))
+            check("ask() sent the prompt", seen.get("sent") == "what should I cut?")
+            check("ask() bound the conversation to the Mind", seen.get("mindId") == "mind_smoke_1")
+        finally:
+            ma.resolve_mind_id = original_resolve
+            ma.ensure_conversation = original_ensure
+            ma.latest_fingerprint = original_latest
+            ma.send_message = original_send
+            ma._conversation_cache.discard(seen.get("alias") or "")
+    finally:
+        ma.get_history = original_history
 
 
 def main() -> int:
@@ -221,6 +475,12 @@ def main() -> int:
         )
 
         # 11. authentication & database tests ----------------------------------
+        from app.db import SessionLocal
+        from app.models.user import User
+        with SessionLocal() as db:
+            db.query(User).filter(User.email.in_(["creator@example.com", "google.creator@gmail.com"])).delete(synchronize_session=False)
+            db.commit()
+
         # Weak / generic password rejection
         weak_resp = client.post(
             "/api/auth/signup",
@@ -357,6 +617,63 @@ def main() -> int:
             json={"email": "creator@example.com", "password": "BrandNewStrong!123"},
         )
         check("new password login succeeds (200)", new_signin.status_code == 200)
+
+        # 13. real analytics & playbook tests ----------------------------------
+        analytics_resp = client.get("/api/analytics")
+        check("GET /api/analytics 200", analytics_resp.status_code == 200)
+        a_data = analytics_resp.json()
+        check("analytics has summary", "summary" in a_data)
+        check("analytics has posts", "posts" in a_data and isinstance(a_data["posts"], list))
+        check("analytics has playbook", "playbook" in a_data and isinstance(a_data["playbook"], list))
+
+        playbook_resp = client.get("/api/analytics/playbook")
+        check("GET /api/analytics/playbook 200", playbook_resp.status_code == 200)
+        pb_list = playbook_resp.json()
+        check("playbook list is non-empty", len(pb_list) > 0)
+
+        # 14. minds persistent memory & agent tests ----------------------------
+        mind_status_resp = client.get("/api/mind/status")
+        check("GET /api/mind/status 200", mind_status_resp.status_code == 200)
+        m_status = mind_status_resp.json()
+        check("persistent memory is enabled", m_status.get("persistentMemoryEnabled") is True)
+
+        # Store persistent tenet
+        mem_create = client.post(
+            "/api/mind/memories",
+            json={
+                "category": "tenet",
+                "key": "standing_rules",
+                "content": "Keep pacing energetic and hook in first 2s.",
+            },
+        )
+        check("POST /api/mind/memories 200", mem_create.status_code == 200)
+        created_mem = mem_create.json()
+        check("memory has camelCase createdAt", "createdAt" in created_mem)
+        mem_id = created_mem.get("id")
+
+        # Verify memory listing
+        mems_list = client.get("/api/mind/memories?category=tenet").json()
+        check("memory found in list", any(m.get("id") == mem_id for m in mems_list))
+
+        # Chat with Mind
+        mind_chat = client.post(
+            "/api/mind/chat",
+            json={"text": "What are my standing rules?", "context": "Take editor"},
+        )
+        check("POST /api/mind/chat 200", mind_chat.status_code == 200)
+        chat_msg = mind_chat.json()
+        check("mind chat reply has role mind", chat_msg.get("role") == "mind")
+
+        # Delete test memory
+        if mem_id:
+            del_mem = client.delete(f"/api/mind/memories/{mem_id}")
+            check("DELETE /api/mind/memories/{id} 200", del_mem.status_code == 200)
+
+    # 15. Minds Builder API adapter (offline — no key, no network) -------------
+    _check_minds_adapter()
+
+    # 16. JSON extraction from a conversational Mind ---------------------------
+    _check_json_extraction()
 
     print()
     if FAILS:

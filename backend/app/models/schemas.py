@@ -73,6 +73,10 @@ class Message(CamelModel):
     role: Role
     text: str
     created_at: int
+    # True on the placeholder returned while a real Mind composes its answer:
+    # the Builder API is asynchronous, so the reply lands in history later and
+    # the client polls GET /api/messages/{videoId} for it.
+    pending: bool = False
 
 
 # --- Request bodies --------------------------------------------------------
@@ -236,6 +240,66 @@ class ProjectResponse(CamelModel):
     playhead: float = 0.0
     created_at: int
     updated_at: int
+
+
+# --- Mind & Memory schemas --------------------------------------------------
+class MindMemoryCreate(CamelModel):
+    category: str = "general"
+    key: Optional[str] = None
+    content: str
+    metadata_json: Optional[str] = "{}"
+
+
+class MindMemoryResponse(CamelModel):
+    id: str
+    category: str
+    key: Optional[str] = None
+    content: str
+    metadata_json: Optional[str] = "{}"
+    created_at: int
+    updated_at: int
+
+
+class ChatPromptRequest(CamelModel):
+    text: str
+    video_id: Optional[str] = None
+    context: Optional[str] = None
+
+
+# --- Analytics & Playbook schemas -------------------------------------------
+class AnalyticsPostItem(CamelModel):
+    id: str
+    day: str
+    title: str
+    hook: str
+    views: int
+    verdict: Verdict
+    url: Optional[str] = None
+
+
+class AnalyticsSummary(CamelModel):
+    posts: int = 0
+    total_views: int = 0
+    median: int = 0
+    hit_rate: float = 0.0
+    hits: int = 0
+    flops: int = 0
+    mids: int = 0
+
+
+class PlaybookRow(CamelModel):
+    id: Optional[str] = None
+    style: str
+    sample: int
+    hit_rate: float
+    note: str
+    locked: bool = False
+
+
+class AnalyticsDataResponse(CamelModel):
+    posts: list[AnalyticsPostItem] = []
+    summary: AnalyticsSummary = AnalyticsSummary()
+    playbook: list[PlaybookRow] = []
 
 
 

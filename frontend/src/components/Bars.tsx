@@ -3,10 +3,15 @@
 import { motion, type Variants } from "motion/react";
 import { EASE, VIEWPORT, staggerContainer } from "@/lib/motion";
 import { useReducedMotionSafe } from "./motion/useReducedMotionSafe";
-import { daySeries, type AnalyticsPost } from "@/lib/mockAnalytics";
+type PostItem = {
+  id?: string;
+  day: string;
+  views: number;
+  verdict?: "hit" | "mid" | "flop";
+};
 
 type BarsProps = {
-  posts: AnalyticsPost[];
+  posts: PostItem[];
   median: number;
   /** Extra class alongside `.bars`, e.g. `home__bars`. */
   className?: string;
@@ -29,8 +34,27 @@ const barReveal: Variants = {
  */
 export default function Bars({ posts, median, className }: BarsProps) {
   const reduced = useReducedMotionSafe();
-  const series = daySeries(posts);
-  const maxViews = Math.max(...series.map((point) => point.views), median);
+
+  if (!posts || posts.length === 0) {
+    return (
+      <div
+        className={className ? `bars-empty ${className}` : "bars-empty"}
+        style={{
+          padding: "36px 16px",
+          textAlign: "center",
+          color: "var(--text-muted, #888)",
+        }}
+      >
+        <p style={{ fontWeight: 500, fontSize: "0.9rem" }}>No posts published yet</p>
+        <p style={{ fontSize: "0.8rem", marginTop: 4, opacity: 0.75 }}>
+          Published cuts will show here with their view volume vs median.
+        </p>
+      </div>
+    );
+  }
+
+  const series = posts.map((p) => ({ day: p.day, views: p.views }));
+  const maxViews = Math.max(...series.map((point) => point.views), median, 1);
 
   return (
     <motion.div

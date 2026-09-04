@@ -1,4 +1,4 @@
-﻿"""Database setup for Encore using SQLAlchemy and PostgreSQL.
+"""Database setup for Encore using SQLAlchemy and PostgreSQL.
 
 Configurable via DATABASE_URL in .env:
     DATABASE_URL=postgresql://postgres:password@localhost:5432/encore
@@ -58,17 +58,13 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def _sync_sqlite_columns() -> None:
-    """Add model columns that are missing from an existing SQLite table.
+def _sync_missing_columns() -> None:
+    """Add model columns that are missing from an existing table across PostgreSQL and SQLite.
 
     `create_all` only creates absent *tables* — it never alters an existing one,
     so newly-added columns (e.g. Project.verdict/views/post_url/post_id) would be
-    missing on an older data/encore.db and every query would fail. On SQLite we
-    reconcile them in place with ALTER TABLE ADD COLUMN; other dialects are left
-    to real migrations.
+    missing on older tables. This reconciles missing columns in place with ALTER TABLE.
     """
-    if engine.dialect.name != "sqlite":
-        return
     from sqlalchemy import inspect as sa_inspect, text as sa_text
 
     inspector = sa_inspect(engine)
@@ -95,6 +91,6 @@ def init_db() -> None:
     """Create all registered database tables if they do not already exist."""
     Base.metadata.create_all(bind=engine)
     try:
-        _sync_sqlite_columns()
+        _sync_missing_columns()
     except Exception as e:  # never block startup on a best-effort column sync
-        logger.warning(f"SQLite column sync skipped: {e}")
+        logger.warning(f"Database column sync skipped: {e}")

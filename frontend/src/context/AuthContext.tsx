@@ -32,18 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const stored = JSON.parse(raw) as User;
-        const next =
-          !stored.name || stored.name === "Creator"
-            ? {
-                ...stored,
-                name: "Mira Chen",
-                email: stored.email === "you@encore.app" ? "mira@encore.app" : stored.email,
-                handle: stored.handle || "@mira.studies",
-                niche: stored.niche || "Study vlogs",
-              }
-            : stored;
-        setUser(next);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        setUser(stored);
       }
     } catch {
       localStorage.removeItem(STORAGE_KEY);

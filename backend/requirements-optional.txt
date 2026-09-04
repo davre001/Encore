@@ -10,8 +10,8 @@
 # Transcription (CTranslate2 backend — no torch needed).
 faster-whisper
 
-# Minds (MindsDB) agent SDK. Import root: `minds`.
-minds-sdk
+# Minds by Animoca Brands needs nothing here: the Builder API is plain HTTP over
+# httpx (a core dep), and Animoca ships no Python SDK. Set MINDS_BUILDER_API_KEY.
 
 # YouTube Data API publish + stats.
 google-api-python-client

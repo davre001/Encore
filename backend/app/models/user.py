@@ -76,3 +76,76 @@ class Project(Base):
     def new_id(cls) -> str:
         return f"proj_{uuid.uuid4().hex[:8]}"
 
+
+class MindMemory(Base):
+    __tablename__ = "mind_memories"
+
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
+    category = Column(String, nullable=False, default="general")  # "tenet", "playbook", "preference", "context", "history"
+    key = Column(String, nullable=True, index=True)  # e.g. "standing_rules", "hook_preference", "editing_style"
+    content = Column(Text, nullable=False)
+    metadata_json = Column(Text, default="{}")
+    created_at = Column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000))
+
+    @classmethod
+    def new_id(cls) -> str:
+        return f"mem_{uuid.uuid4().hex[:8]}"
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
+    video_id = Column(String, nullable=True, index=True)
+    role = Column(String, nullable=False)  # "you", "mind"
+    text = Column(Text, nullable=False)
+    created_at = Column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000))
+
+    @classmethod
+    def new_id(cls) -> str:
+        return f"msg_{uuid.uuid4().hex[:8]}"
+
+
+class PostAnalytics(Base):
+    __tablename__ = "post_analytics"
+
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
+    project_id = Column(String, nullable=True, index=True)
+    video_id = Column(String, nullable=True)
+    clip_id = Column(String, nullable=True)
+    post_id = Column(String, nullable=True)
+    title = Column(String, nullable=False)
+    hook = Column(String, nullable=True)
+    views = Column(BigInteger, nullable=False, default=0)
+    verdict = Column(String, nullable=False, default="mid")  # "hit", "mid", "flop"
+    day = Column(String, nullable=False, default="Today")
+    post_url = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+    created_at = Column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000))
+
+    @classmethod
+    def new_id(cls) -> str:
+        return f"post_{uuid.uuid4().hex[:8]}"
+
+
+class PlaybookRule(Base):
+    __tablename__ = "playbook_rules"
+
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
+    style = Column(String, nullable=False, index=True)  # e.g. "Confession hook", "Rant"
+    sample = Column(BigInteger, default=1)
+    hit_rate = Column(Float, default=0.5)
+    note = Column(Text, nullable=True)
+    locked = Column(Boolean, default=False)
+    created_at = Column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000))
+
+    @classmethod
+    def new_id(cls) -> str:
+        return f"rule_{uuid.uuid4().hex[:8]}"
+

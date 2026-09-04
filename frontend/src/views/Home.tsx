@@ -12,8 +12,12 @@ import Reveal from "@/components/motion/Reveal";
 import CountUp from "@/components/motion/CountUp";
 import { Stagger, StaggerItem } from "@/components/motion/Stagger";
 import { DUR, EASE, springSoft } from "@/lib/motion";
-import { analyticsPosts, analyticsSummary } from "@/lib/mockAnalytics";
 import * as api from "@/api/client";
+import type { AnalyticsData } from "@/types";
+import {
+  analyticsPosts,
+  analyticsSummary,
+} from "@/lib/mockAnalytics";
 import {
   formatWhen,
   loadProjects,
@@ -50,6 +54,19 @@ export default function Home() {
   const router = useRouter();
   const [now, setNow] = useState(() => new Date());
   const [projects, setProjects] = useState<Project[]>([]);
+  const [analytics, setAnalytics] = useState<AnalyticsData>({
+    posts: [],
+    summary: {
+      posts: 0,
+      totalViews: 0,
+      median: 0,
+      hitRate: 0,
+      hits: 0,
+      flops: 0,
+      mids: 0,
+    },
+    playbook: [],
+  });
   const [showAll, setShowAll] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
@@ -80,6 +97,15 @@ export default function Home() {
       })
       .catch(() => {});
 
+    api
+      .getAnalytics()
+      .then((data) => {
+        if (data && data.summary) {
+          setAnalytics(data);
+        }
+      })
+      .catch(() => {});
+
     return () => window.clearInterval(tick);
   }, []);
 
@@ -98,27 +124,28 @@ export default function Home() {
   }
 
   const visible = showAll ? projects : projects.slice(0, PREVIEW);
-  const summary = analyticsSummary(analyticsPosts);
+  const summary = analytics.summary;
+  const posts = analytics.posts;
   const firstName = (user?.name ?? "there").split(" ")[0];
   const hour = now.getHours();
   const hello = useMemo(() => greeting(hour), [hour]);
   const wave = useMemo(() => greetingEmoji(hour), [hour]);
 
-  const best = analyticsPosts.reduce((top, post) =>
-    post.views > top.views ? post : top,
-  );
+  const best = posts.length > 0
+    ? posts.reduce((top, post) => (post.views > top.views ? post : top), posts[0])
+    : null;
 
-  const aboveMedian = analyticsPosts.filter(
-    (post) => post.views >= summary.median,
-  ).length;
-  const aboveShare = Math.round((aboveMedian / summary.posts) * 100);
+  const aboveMedian = summary.median > 0
+    ? posts.filter((post) => post.views >= summary.median).length
+    : 0;
+  const aboveShare = summary.posts > 0 ? Math.round((aboveMedian / summary.posts) * 100) : 0;
 
   const cards = [
     {
       label: "Total views",
       value: summary.totalViews,
       suffix: "",
-      delta: { dir: null, text: `${summary.posts} posts this week` },
+      delta: { dir: null, text: `${summary.posts} posts tracked` },
     },
     {
       label: "Hit rate",
@@ -133,10 +160,15 @@ export default function Home() {
       label: "Median views",
       value: summary.median,
       suffix: "",
-      delta: {
-        dir: "up",
-        text: `Best ran ${(best.views / summary.median).toFixed(1)}× median`,
-      },
+      delta: best && summary.median > 0
+        ? {
+            dir: "up",
+            text: `Best ran ${(best.views / summary.median).toFixed(1)}× median`,
+          }
+        : {
+            dir: null,
+            text: "Based on real posts",
+          },
     },
     {
       label: "Tapes",
@@ -154,8 +186,9 @@ export default function Home() {
             {hello}, {firstName} {wave}
           </h1>
           <p>
-            {summary.hits} hits this week · median {summary.median.toLocaleString()}{" "}
-            views. Open a tape or pick up a leftover.
+            {summary.posts > 0
+              ? `${summary.hits} hits this week · median ${summary.median.toLocaleString()} views. Open a tape or pick up a leftover.`
+              : "No published posts yet. Drop a long take in the editor to start creating cuts."}
           </p>
         </div>
         <Link href="/editor" className="btn btn--primary">
@@ -204,7 +237,7 @@ export default function Home() {
             </Link>
           </div>
           <div className="well">
-            <ViewsBars posts={analyticsPosts} median={summary.median} />
+            <ViewsBars posts={posts} median={summary.median} />
           </div>
         </section>
 
@@ -365,26 +398,30 @@ export default function Home() {
             </Link>
           </div>
           <div className="well well--list">
-            {analyticsPosts
-              .slice()
-              .reverse()
-              .slice(0, 4)
-              .map((post) => {
-                const Icon = VERDICT_ICON[post.verdict];
-                return (
-                  <article key={post.id} className="row">
-                    <span className={`row__icon is-${post.verdict}`} aria-hidden="true">
-                      <Icon />
-                    </span>
-                    <div className="row__body">
-                      <p className="row__name">{post.title}</p>
-                      <p className="row__meta">
-                        {post.views.toLocaleString()} views · {post.day}
-                      </p>
-                    </div>
-                  </article>
-                );
-              })}
+            {posts.length === 0 ? (
+              <p className="panel__empty">No recent posts yet. Publish a cut to track activity.</p>
+            ) : (
+              posts
+                .slice()
+                .reverse()
+                .slice(0, 4)
+                .map((post) => {
+                  const Icon = VERDICT_ICON[post.verdict] ?? Minus;
+                  return (
+                    <article key={post.id} className="row">
+                      <span className={`row__icon is-${post.verdict}`} aria-hidden="true">
+                        <Icon />
+                      </span>
+                      <div className="row__body">
+                        <p className="row__name">{post.title}</p>
+                        <p className="row__meta">
+                          {post.views.toLocaleString()} views · {post.day}
+                        </p>
+                      </div>
+                    </article>
+                  );
+                })
+            )}
           </div>
         </section>
       </div>

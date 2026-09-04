@@ -155,7 +155,7 @@ winget install Gyan.FFmpeg        # Windows
 |---|---|---|
 | `ffmpeg` / `ffprobe` | the binaries are on `PATH` | duration → `184s` fallback; render keeps the source |
 | `whisper` | `faster-whisper` installed **and** ffmpeg present | no transcript → positional beats |
-| `minds` | `minds-sdk` installed **and** `MINDS_BUILDER_API_KEY` set | ported deterministic captions/chat/review |
+| `minds` | `MINDS_BUILDER_API_KEY` set from [build.hellominds.ai](https://build.hellominds.ai) | persistent memory-guided chat/review |
 | `youtube` | `google-api-python-client` installed **and** OAuth env set | simulated `postUrl` + simulated stats |
 
 ### Configuration
@@ -164,9 +164,9 @@ Copy `backend/.env.example` to `backend/.env` (gitignored) and fill in only what
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `MINDS_BUILDER_API_KEY` | Minds (MindsDB) agent key — get it at [mdb.ai](https://mdb.ai) | — |
-| `MINDS_ID` | Minds agent/mind id to use | — |
-| `MINDS_BASE_URL` | Custom Minds server | Minds Cloud |
+| `MINDS_BUILDER_API_KEY` | Minds by Animoca Brands Builder API key (JWT) — get it at [build.hellominds.ai](https://build.hellominds.ai) | — |
+| `MINDS_ID` | Optional — specific Mind ID to pin; leave empty to use first enabled Mind | — |
+| `MINDS_BASE_URL` | Optional — Minds by Animoca API endpoint | `https://api.build.hellominds.ai` |
 | `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN` | YouTube Data API OAuth | — |
 | `WHISPER_MODEL` | faster-whisper model size | `base` |
 | `UPLOAD_DIR` / `DATA_DIR` | Storage locations | `../uploads`, `../data` |

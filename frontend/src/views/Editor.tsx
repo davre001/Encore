@@ -1462,21 +1462,42 @@ export default function Editor() {
 
   /* ---- Mind ---- */
 
+  useEffect(() => {
+    const targetId = video?.id || projectId || "notebook";
+    api
+      .getMessages(targetId)
+      .then((history) => {
+        if (history && history.length > 0) {
+          setMessages(history);
+        }
+      })
+      .catch(() => {});
+  }, [video?.id, projectId]);
+
   async function handleSend(text: string) {
     setPrompt("");
     setMessages((prev) => [...prev, youMessage(text)]);
-    if (!video) {
-      window.setTimeout(() => {
-        pushMind(
-          "I’m on the notebook. Drop a long take first so I have context on what we’re editing.",
-        );
-      }, 400);
-      return;
-    }
+    const targetId = video?.id || projectId || "notebook";
 
     try {
-      const reply = await api.sendMessage(video.id, text);
+      const reply = await api.sendMessage(targetId, text);
       setMessages((prev) => [...prev, reply]);
+      if (!reply.pending) return;
+
+      // A live Mind answers asynchronously: the placeholder above holds the
+      // slot while we poll history for the real reply.
+      const landed = await api.waitForMindReply(targetId, reply.createdAt);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === reply.id
+            ? landed ?? {
+                ...m,
+                text: "The Mind is taking longer than usual — it will show up here when it answers.",
+                pending: false,
+              }
+            : m,
+        ),
+      );
     } catch (err: any) {
       pushMind(`Failed to reach Encore Mind: ${err.message || err}`);
     }

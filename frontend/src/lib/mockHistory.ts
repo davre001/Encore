@@ -80,22 +80,6 @@ export function buildHistory(
   projects: Project[] = loadProjects(),
   overrides: HistoryOverrides = emptyOverrides,
 ): HistoryItem[] {
-  const now = Date.now();
-
-  const posted: HistoryItem[] = analyticsPosts.map((post) => ({
-    id: post.id,
-    title: post.title,
-    source: "study-vlog-final.mp4",
-    category: "posted",
-    status: post.verdict,
-    updatedAt: timestampForDay(post.day, now),
-    median: post.median,
-    views: post.views,
-    verdict: post.verdict,
-    hook: post.hook,
-    url: post.url,
-  }));
-
   const drafts: HistoryItem[] = projects
     .filter((project) => project.status === "draft")
     .map((project) => ({
@@ -109,27 +93,13 @@ export function buildHistory(
       clips: project.clips,
     }));
 
-  const unused: HistoryItem[] = leftovers.map((item, index) => ({
-    id: item.id,
-    title: item.label,
-    source: item.from,
-    category: "leftover",
-    status: "unused",
-    updatedAt: now - (index + 2) * DAY_MS,
-    median: ANALYTICS_MEDIAN,
-    range: item.range,
-  }));
-
-  // Real projects that have been posted and checked through the editor. Unlike
-  // the demo fixtures above, these carry a persisted verdict/views/url, so a
-  // creator's actual hits, mids, and flops show up in History with a Re-cut
-  // action. (Bare demo drafts stay drafts; only projects that truly have an
-  // outcome — verdict or url — surface here, so the fixtures aren't polluted.)
   const realPosted: HistoryItem[] = projects
     .filter(
       (project) =>
-        (project.status === "posted" || project.status === "checked") &&
-        (project.verdict !== undefined || project.url !== undefined),
+        project.status === "posted" ||
+        project.status === "checked" ||
+        project.verdict !== undefined ||
+        project.url !== undefined,
     )
     .map((project) => ({
       id: project.id,
@@ -145,7 +115,7 @@ export function buildHistory(
       clips: project.clips,
     }));
 
-  return [...posted, ...realPosted, ...drafts, ...unused]
+  return [...realPosted, ...drafts]
     .filter((item) => !overrides.hidden.includes(item.id))
     .map((item) =>
       overrides.renamed[item.id]
