@@ -1,7 +1,9 @@
-"""Clips — list a video's cuts, and re-render one on demand."""
+"""Clips — list a video's cuts, create and edit them, per-user isolated."""
 
-from fastapi import APIRouter, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException
 
+from ..dependencies import get_user_id
 from ..models.schemas import Clip, ClipCreate, ClipUpdate
 from .. import storage
 from ..services import captions, ffmpeg
@@ -10,31 +12,40 @@ router = APIRouter()
 
 
 @router.get("/{video_id}", response_model=list[Clip])
-async def list_clips(video_id: str) -> list[Clip]:
-    return [Clip.model_validate(c) for c in storage.list_clips(video_id)]
+async def list_clips(
+    video_id: str,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> list[Clip]:
+    clips = storage.list_clips(video_id)
+    if user_id:
+        clips = [c for c in clips if c.get("userId") == user_id or not c.get("userId")]
+    return [Clip.model_validate(c) for c in clips]
 
 
 @router.post("/{clip_id}/render", response_model=Clip)
-async def render_clip(clip_id: str) -> Clip:
+async def render_clip(
+    clip_id: str,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> Clip:
     record = storage.get_clip(clip_id)
     if record is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if user_id and record.get("userId") and record["userId"] != user_id:
         raise HTTPException(status_code=404, detail="clip not found")
 
     video = storage.get_video(record["videoId"])
     src_path = video.get("srcPath") if video else None
     if src_path:
-        ffmpeg.render_clip(src_path, record["start"], record["end"])  # best-effort
+        ffmpeg.render_clip(src_path, record["start"], record["end"])
     return Clip.model_validate(record)
 
 
 @router.post("", response_model=Clip)
-async def create_clip(body: ClipCreate) -> Clip:
-    """Create a cut from a range of the take — backs the manual editing tools.
-
-    Mirrors moments._build_clip: fill any missing copy, persist, render on a
-    best-effort basis, and return the real Clip (with a server id the publish
-    endpoint will recognise).
-    """
+async def create_clip(
+    body: ClipCreate,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> Clip:
+    """Create a cut from a range of the take — backs the manual editing tools."""
     video = storage.get_video(body.video_id)
     if video is None:
         raise HTTPException(status_code=404, detail="video not found")
@@ -61,19 +72,27 @@ async def create_clip(body: ClipCreate) -> Clip:
         end=body.end,
         posted=False,
     )
-    storage.save_clip(clip.model_dump(by_alias=True))
+    record = clip.model_dump(by_alias=True)
+    record["userId"] = user_id
+    storage.save_clip(record)
 
     src_path = video.get("srcPath")
     if src_path:
-        ffmpeg.render_clip(src_path, clip.start, clip.end)  # best-effort
+        ffmpeg.render_clip(src_path, clip.start, clip.end)
     return clip
 
 
 @router.patch("/{clip_id}", response_model=Clip)
-async def update_clip(clip_id: str, body: ClipUpdate) -> Clip:
-    """Persist edits to an unposted clip (caption tab, regen, trim)."""
+async def update_clip(
+    clip_id: str,
+    body: ClipUpdate,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> Clip:
+    """Persist edits to an unposted clip — owner only."""
     record = storage.get_clip(clip_id)
     if record is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if user_id and record.get("userId") and record["userId"] != user_id:
         raise HTTPException(status_code=404, detail="clip not found")
     if record.get("posted"):
         raise HTTPException(status_code=409, detail="cannot edit a posted clip")
@@ -86,10 +105,9 @@ async def update_clip(clip_id: str, body: ClipUpdate) -> Clip:
     if updated is None:
         raise HTTPException(status_code=404, detail="clip not found")
 
-    # Re-cut on disk when the range moved, so the file matches the new trim.
     if "start" in patch or "end" in patch:
         video = storage.get_video(updated["videoId"])
         src_path = video.get("srcPath") if video else None
         if src_path:
-            ffmpeg.render_clip(src_path, updated["start"], updated["end"])  # best-effort
+            ffmpeg.render_clip(src_path, updated["start"], updated["end"])
     return Clip.model_validate(updated)

@@ -18,6 +18,23 @@ const API = "/api";
 const BACKEND =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:5000";
 
+// ---------------------------------------------------------------------------
+// Auth header — all requests carry X-User-Id so the backend scopes data
+// to the authenticated creator. Reads from localStorage on the client.
+// ---------------------------------------------------------------------------
+function userHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem("encore.user");
+    if (!raw) return {};
+    const user = JSON.parse(raw) as { id?: string };
+    if (user?.id) return { "X-User-Id": user.id };
+  } catch {
+    // ignore
+  }
+  return {};
+}
+
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -35,6 +52,7 @@ export async function uploadVideo(file: File): Promise<Video> {
 
   const res = await fetch(`${BACKEND}/api/videos`, {
     method: "POST",
+    headers: userHeaders(),
     body: form,
   });
   return handleResponse<Video>(res);
@@ -42,7 +60,9 @@ export async function uploadVideo(file: File): Promise<Video> {
 
 /** Retrieve video metadata by id. */
 export async function getVideo(videoId: string): Promise<Video> {
-  const res = await fetch(`${API}/videos/${encodeURIComponent(videoId)}`);
+  const res = await fetch(`${API}/videos/${encodeURIComponent(videoId)}`, {
+    headers: userHeaders(),
+  });
   return handleResponse<Video>(res);
 }
 
@@ -51,13 +71,15 @@ export function videoFileUrl(videoId: string): string {
   return `${API}/videos/${encodeURIComponent(videoId)}/file`;
 }
 
-/** List proposed moments for a video (returns [] until background detection completes). */
+/** List proposed moments for a video. */
 export async function listMoments(videoId: string): Promise<Moment[]> {
-  const res = await fetch(`${API}/moments/${encodeURIComponent(videoId)}`);
+  const res = await fetch(`${API}/moments/${encodeURIComponent(videoId)}`, {
+    headers: userHeaders(),
+  });
   return handleResponse<Moment[]>(res);
 }
 
-/** Accept or reject a moment. If accepted, the backend automatically generates a Clip. */
+/** Accept or reject a moment. */
 export async function decideMoment(
   momentId: string,
   decision: Decision
@@ -66,7 +88,7 @@ export async function decideMoment(
     `${API}/moments/${encodeURIComponent(momentId)}/decide`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...userHeaders() },
       body: JSON.stringify({ decision }),
     }
   );
@@ -75,7 +97,9 @@ export async function decideMoment(
 
 /** List generated clips for a video. */
 export async function listClips(videoId: string): Promise<Clip[]> {
-  const res = await fetch(`${API}/clips/${encodeURIComponent(videoId)}`);
+  const res = await fetch(`${API}/clips/${encodeURIComponent(videoId)}`, {
+    headers: userHeaders(),
+  });
   return handleResponse<Clip[]>(res);
 }
 
@@ -83,12 +107,12 @@ export async function listClips(videoId: string): Promise<Clip[]> {
 export async function renderClip(clipId: string): Promise<Clip> {
   const res = await fetch(
     `${API}/clips/${encodeURIComponent(clipId)}/render`,
-    { method: "POST" }
+    { method: "POST", headers: userHeaders() }
   );
   return handleResponse<Clip>(res);
 }
 
-/** Create a clip from an arbitrary range of the take (manual editing tools). */
+/** Create a clip from an arbitrary range of the take. */
 export async function createClip(input: {
   videoId: string;
   start: number;
@@ -102,7 +126,7 @@ export async function createClip(input: {
 }): Promise<Clip> {
   const res = await fetch(`${API}/clips`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...userHeaders() },
     body: JSON.stringify(input),
   });
   return handleResponse<Clip>(res);
@@ -117,18 +141,19 @@ export async function updateClip(
 ): Promise<Clip> {
   const res = await fetch(`${API}/clips/${encodeURIComponent(clipId)}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...userHeaders() },
     body: JSON.stringify(patch),
   });
   return handleResponse<Clip>(res);
 }
 
-/** Publish a clip to YouTube (simulated or real). */
+/** Publish a clip to YouTube. */
 export async function postClip(
   clipId: string
 ): Promise<{ postId: string; postUrl: string }> {
   const res = await fetch(`${API}/posts/${encodeURIComponent(clipId)}`, {
     method: "POST",
+    headers: userHeaders(),
   });
   return handleResponse<{ postId: string; postUrl: string }>(res);
 }
@@ -136,40 +161,35 @@ export async function postClip(
 /** Check view count and verdict for a published post. */
 export async function checkPost(postId: string): Promise<PostCheck> {
   const res = await fetch(
-    `${API}/posts/${encodeURIComponent(postId)}/check`
+    `${API}/posts/${encodeURIComponent(postId)}/check`,
+    { headers: userHeaders() }
   );
   return handleResponse<PostCheck>(res);
 }
 
 /** List all notebook messages for a video. */
 export async function listMessages(videoId: string): Promise<Message[]> {
-  const res = await fetch(`${API}/messages/${encodeURIComponent(videoId)}`);
+  const res = await fetch(`${API}/messages/${encodeURIComponent(videoId)}`, {
+    headers: userHeaders(),
+  });
   return handleResponse<Message[]>(res);
 }
 export const getMessages = listMessages;
 
-/** Send a chat message to the Mind and receive its reply.
- *
- * A wired Mind answers asynchronously, so the response can be a `pending`
- * placeholder — follow it with `waitForMindReply` to pick up the real answer.
- */
+/** Send a chat message to the Mind. */
 export async function sendMessage(
   videoId: string,
   text: string
 ): Promise<Message> {
   const res = await fetch(`${API}/messages`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...userHeaders() },
     body: JSON.stringify({ videoId, text }),
   });
   return handleResponse<Message>(res);
 }
 
-/** Poll notebook history until the Mind's reply lands, or give up (null).
- *
- * `since` is the placeholder's server-side createdAt, so the comparison is free
- * of client clock skew. Transient failures keep polling until the deadline.
- */
+/** Poll notebook history until the Mind's reply lands, or give up (null). */
 export async function waitForMindReply(
   videoId: string,
   since: number,
@@ -188,7 +208,7 @@ export async function waitForMindReply(
       );
       if (replies.length > 0) return replies[replies.length - 1];
     } catch {
-      // Keep polling — a dropped request should not end the wait.
+      // Keep polling
     }
   }
   return null;
@@ -260,7 +280,7 @@ export async function syncGoogleUser(input: {
   return handleResponse<User>(res);
 }
 
-/** Request a 6-digit password reset verification code by providing and confirming email. */
+/** Request a 6-digit password reset verification code. */
 export async function forgotPassword(input: {
   email: string;
   confirmEmail: string;
@@ -288,77 +308,74 @@ export async function resetPassword(input: {
 }
 
 /* =========================================================================
-   PROJECTS (Auto-save, Edits, Options, and History)
+   PROJECTS
    ========================================================================= */
 
-/** Create or save a project with all take segments, clips, and effect options. */
 export async function saveProject(
   input: Partial<ProjectState> & { name: string }
 ): Promise<ProjectState> {
   const res = await fetch(`${API}/projects`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...userHeaders() },
     body: JSON.stringify(input),
   });
   return handleResponse<ProjectState>(res);
 }
 
-/** Update / auto-save an existing project. */
 export async function updateProject(
   projectId: string,
   input: Partial<ProjectState>
 ): Promise<ProjectState> {
   const res = await fetch(`${API}/projects/${encodeURIComponent(projectId)}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...userHeaders() },
     body: JSON.stringify(input),
   });
   return handleResponse<ProjectState>(res);
 }
 
-/** List all user projects for History, sorted by updatedAt descending. */
 export async function listProjects(): Promise<ProjectState[]> {
-  const res = await fetch(`${API}/projects`);
+  const res = await fetch(`${API}/projects`, { headers: userHeaders() });
   return handleResponse<ProjectState[]>(res);
 }
 
-/** Get a single project by ID with its saved takeSegments, clips, and effects. */
 export async function getProject(projectId: string): Promise<ProjectState> {
-  const res = await fetch(`${API}/projects/${encodeURIComponent(projectId)}`);
+  const res = await fetch(`${API}/projects/${encodeURIComponent(projectId)}`, {
+    headers: userHeaders(),
+  });
   return handleResponse<ProjectState>(res);
 }
 
-/** Delete a project from history. */
 export async function deleteProject(
   projectId: string
 ): Promise<{ message: string; status: string }> {
   const res = await fetch(`${API}/projects/${encodeURIComponent(projectId)}`, {
     method: "DELETE",
+    headers: userHeaders(),
   });
   return handleResponse<{ message: string; status: string }>(res);
 }
 
 /* =========================================================================
-   ANALYTICS & PLAYBOOK (Real creator data)
+   ANALYTICS & PLAYBOOK
    ========================================================================= */
 
-/** Get real creator analytics, summary, and playbook rules. */
 export async function getAnalytics(): Promise<AnalyticsData> {
-  const res = await fetch(`${API}/analytics`);
+  const res = await fetch(`${API}/analytics`, { headers: userHeaders() });
   return handleResponse<AnalyticsData>(res);
 }
 
-/** Get creator playbook rules. */
 export async function getPlaybook(): Promise<PlaybookRow[]> {
-  const res = await fetch(`${API}/analytics/playbook`);
+  const res = await fetch(`${API}/analytics/playbook`, {
+    headers: userHeaders(),
+  });
   return handleResponse<PlaybookRow[]>(res);
 }
 
-/** Update or add a creator playbook rule. */
 export async function updatePlaybookRule(rule: PlaybookRow): Promise<PlaybookRow> {
   const res = await fetch(`${API}/analytics/playbook`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...userHeaders() },
     body: JSON.stringify(rule),
   });
   return handleResponse<PlaybookRow>(res);
@@ -368,14 +385,14 @@ export async function updatePlaybookRule(rule: PlaybookRow): Promise<PlaybookRow
    MINDS & PERSISTENT MEMORY
    ========================================================================= */
 
-/** Get persistent memories for creator tenets, rules, and learned preferences. */
 export async function getMindMemories(category?: string): Promise<MindMemory[]> {
   const qs = category ? `?category=${encodeURIComponent(category)}` : "";
-  const res = await fetch(`${API}/mind/memories${qs}`);
+  const res = await fetch(`${API}/mind/memories${qs}`, {
+    headers: userHeaders(),
+  });
   return handleResponse<MindMemory[]>(res);
 }
 
-/** Add or update a standing tenet or preference in persistent memory. */
 export async function addMindMemory(input: {
   category: string;
   content: string;
@@ -384,32 +401,27 @@ export async function addMindMemory(input: {
 }): Promise<MindMemory> {
   const res = await fetch(`${API}/mind/memories`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...userHeaders() },
     body: JSON.stringify(input),
   });
   return handleResponse<MindMemory>(res);
 }
 
-/** Delete a memory from persistent storage. */
 export async function deleteMindMemory(id: string): Promise<{ status: string }> {
   const res = await fetch(`${API}/mind/memories/${encodeURIComponent(id)}`, {
     method: "DELETE",
+    headers: userHeaders(),
   });
   return handleResponse<{ status: string }>(res);
 }
 
-/** Get status of MindsDB integration and persistent memory. */
 export async function getMindStatus(): Promise<{
   status: string;
   mindsAvailable: boolean;
   persistentMemoryEnabled: boolean;
   memoriesCount: number;
-  /** Live Builder API diagnostics; null when no key is configured. */
   transport: MindTransport | null;
 }> {
-  const res = await fetch(`${API}/mind/status`);
+  const res = await fetch(`${API}/mind/status`, { headers: userHeaders() });
   return handleResponse<any>(res);
 }
-
-
-
