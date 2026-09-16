@@ -14,53 +14,20 @@ export type Project = {
 
 const STORAGE_KEY = "encore.projects";
 
-export const defaultProjects: Project[] = [
-  {
-    id: "proj_week",
-    name: "study-vlog-final",
-    updatedAt: Date.now() - 1000 * 60 * 40,
-    clips: 3,
-    status: "checked",
-  },
-  {
-    id: "proj_recap",
-    name: "Kai exam recap",
-    updatedAt: Date.now() - 1000 * 60 * 60 * 22,
-    clips: 2,
-    status: "posted",
-  },
-  {
-    id: "proj_desk",
-    name: "desk setup cutdown",
-    updatedAt: Date.now() - 1000 * 60 * 60 * 50,
-    clips: 1,
-    status: "draft",
-  },
-  {
-    id: "proj_night",
-    name: "night-shift internship",
-    updatedAt: Date.now() - 1000 * 60 * 60 * 80,
-    clips: 4,
-    status: "checked",
-  },
-  {
-    id: "proj_panic",
-    name: "exam-panic leftovers",
-    updatedAt: Date.now() - 1000 * 60 * 60 * 140,
-    clips: 2,
-    status: "draft",
-  },
-];
-
+/**
+ * Projects are real, per-account records loaded from the backend (and cached in
+ * localStorage for offline resume). There are no seeded demo tapes — a fresh
+ * account starts empty and fills up as the creator uploads and cuts.
+ */
 export function loadProjects(): Project[] {
-  if (typeof window === "undefined") return defaultProjects;
+  if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultProjects;
+    if (!raw) return [];
     const parsed = JSON.parse(raw) as Project[];
-    return parsed.length ? parsed : defaultProjects;
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
-    return defaultProjects;
+    return [];
   }
 }
 

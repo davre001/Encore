@@ -4,34 +4,37 @@ Three tiers, best first, each falling through to the next so there is always an
 answer:
   1. Minds proposes beats from the transcript (real AI).
   2. A transcript keyword scan times the known beats to real speech.
-  3. Positional beats as fractions of the take — identical to the frontend's
-     src/lib/mockEditor.ts buildMoments, so with no transcript the API returns
-     exactly what the current mock UI shows.
+  3. Positional beats as fractions of the take, so a video with no usable
+     transcript still comes back with somewhere to start cutting.
+
+Every `reason` below describes the shape of the beat itself. None of them claim
+anything about the creator's track record — a first upload has no history to
+cite, and inventing one would be a lie the UI repeats verbatim.
 """
 
 from ..config import FALLBACK_DURATION
 from .. import storage
 from . import minds
 
-# The three demo beats as fractions of the take, verbatim from mockEditor.ts.
-# Kept as the deterministic floor so fallback == the shipped mock behaviour.
+# Three beats as fractions of the take: the deterministic floor when there is no
+# transcript to work from. Labels and keywords are the detection vocabulary.
 BEATS: list[dict] = [
     {
         "at": (0.1, 0.24),
         "label": "Confession hook",
-        "reason": "Strong open. Your last two confession hooks beat tutorials.",
+        "reason": "Opens on an admission, so it needs no setup to make sense alone.",
         "keywords": ("fail", "confess", "honest", "truth", "admit"),
     },
     {
         "at": (0.34, 0.5),
         "label": "Talking-head tip",
-        "reason": "You rejected two of these last week. Skip unless you want it.",
+        "reason": "One point straight to camera — self-contained if the tip lands early.",
         "keywords": ("tip", "three things", "learned", "how i", "advice"),
     },
     {
         "at": (0.7, 0.84),
         "label": "Exam-panic rant",
-        "reason": "Good leftover energy. Saved well for Shorts.",
+        "reason": "Sustained energy across one unbroken stretch of the take.",
         "keywords": ("panic", "spiral", "2 a.m.", "2am", "exam", "stress", "rant"),
     },
 ]

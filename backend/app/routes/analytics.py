@@ -107,13 +107,16 @@ async def get_analytics(
                     )
                 )
         else:
+            # No DB rules yet: fall back to the JSON taste store. It is empty on
+            # a fresh account, and `sample`/`hitRate` default to zero so a style
+            # with no posts behind it never reads as a 50% hit rate.
             service_rules = playbook.load_playbook()
             for r in service_rules:
                 playbook_list.append(
                     PlaybookRow(
                         style=r.get("style", "Style"),
-                        sample=int(r.get("sample", 1)),
-                        hit_rate=float(r.get("hitRate", 0.5)),
+                        sample=int(r.get("sample", 0)),
+                        hit_rate=float(r.get("hitRate", 0.0)),
                         note=r.get("note", ""),
                         locked=False,
                     )
@@ -153,8 +156,8 @@ async def list_playbook(
     return [
         PlaybookRow(
             style=r.get("style", "Style"),
-            sample=int(r.get("sample", 1)),
-            hit_rate=float(r.get("hitRate", 0.5)),
+            sample=int(r.get("sample", 0)),
+            hit_rate=float(r.get("hitRate", 0.0)),
             note=r.get("note", ""),
             locked=False,
         )

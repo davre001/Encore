@@ -396,9 +396,9 @@ def _intelligent_fallback(
                 + "\nWant me to apply one of these to the current cut?"
             )
         return (
-            "Your playbook prioritizes: 1) Confession hook (first 2s confession/vulnerability), "
-            "2) Fast-paced rants (high completion rate on Shorts), 3) Story-first hooks over tutorials. "
-            "I'll prioritize these when picking standout moments."
+            "Your playbook is still empty — nothing has been posted and checked yet, "
+            "so there is no hit rate to go on. Keep and skip moments as you cut, and "
+            "I'll start recording which styles actually land for you."
         )
 
     # If asking about hook advice or intro
@@ -420,8 +420,8 @@ def _intelligent_fallback(
     # If asking about leftovers
     if "leftover" in lower or "left over" in lower or "unused" in lower:
         return (
-            "You still have the exam-panic rant unused in your Leftovers notebook. "
-            "Shorts liked rants last month — want me to ship it?"
+            "Anything you skip stays in the take, so nothing is lost — skipped moments "
+            "are still there to cut later. Nothing is sitting in leftovers yet."
         )
 
     # If asking about flop or performance check

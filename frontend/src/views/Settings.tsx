@@ -275,10 +275,16 @@ export default function Settings() {
             <div>
               <strong>Creator Memory</strong>
               <p>
-                {mindStatus ? `${mindStatus.memoriesCount} memories stored in database (standing rules, tenets, playbook taste).` : "Loading persistent memory state..."}
+                {!mindStatus
+                  ? "Loading persistent memory state..."
+                  : mindStatus.memoriesCount === 0
+                    ? "Nothing remembered yet. Tenets you save and rules you teach Encore in the notebook persist here."
+                    : `${mindStatus.memoriesCount} ${mindStatus.memoriesCount === 1 ? "memory" : "memories"} stored (standing rules, tenets, playbook taste).`}
               </p>
             </div>
-            <span style={badgeStyle("ok")}>Active</span>
+            <span style={badgeStyle(mindStatus?.memoriesCount ? "ok" : "idle")}>
+              {mindStatus?.memoriesCount ? "Active" : "Empty"}
+            </span>
           </div>
           <div className="toggle-row">
             <div>
@@ -366,7 +372,7 @@ export default function Settings() {
                 </button>
               </div>
             ))
-          ) : (
+          ) : settings.locks.length > 0 ? (
             settings.locks.map((lock) => (
               <div key={lock.id} className="toggle-row">
                 <div>
@@ -391,6 +397,11 @@ export default function Settings() {
                 </button>
               </div>
             ))
+          ) : (
+            <p className="panel__empty">
+              No styles yet. Encore learns what lands as you keep, skip, and post
+              cuts — the ones you never want suggested get locked here.
+            </p>
           )}
         </StaggerItem>
       </Stagger>

@@ -25,26 +25,14 @@ export type HistoryItem = {
   range?: string;
 };
 
-const DAY_ORDER = ["Sun", "Sat", "Fri", "Thu", "Wed", "Tue", "Mon"];
-const DAY_MS = 1000 * 60 * 60 * 24;
-
-/**
- * The analytics fixtures only carry day names, so recency is derived from the
- * weekday position — Sunday is the most recent post.
- */
-function timestampForDay(day: string, now: number) {
-  const daysAgo = DAY_ORDER.indexOf(day);
-  return now - (daysAgo < 0 ? DAY_ORDER.length : daysAgo) * DAY_MS;
-}
-
 const OVERRIDES_KEY = "encore.historyOverrides";
 
 /**
  * Renames and deletions for items that have no store of their own.
  *
- * Drafts are real `Project` records, so those edits go through `saveProjects`
- * and stay in sync with Home. Posted clips and leftovers come from fixtures, so
- * their edits are kept here instead of being lost on reload.
+ * Drafts and posted cuts are real `Project` records, so those edits go through
+ * `saveProjects` and stay in sync with Home. Anything History surfaces without
+ * a backing record keeps its edits here instead of losing them on reload.
  */
 export type HistoryOverrides = {
   hidden: string[];
@@ -70,11 +58,12 @@ export function saveOverrides(next: HistoryOverrides) {
 }
 
 /**
- * One list spanning everything a creator has made: published clips, tapes still
- * in draft, and moments that were cut but never used.
+ * One list spanning everything a creator has made: published clips and tapes
+ * still in draft.
  *
- * Composed from the existing analytics and project fixtures rather than a third
- * copy of the data, so History can never disagree with Analytics or Home.
+ * Built entirely from the creator's own `Project` records — the same source Home
+ * and Analytics read — so the three views can never disagree, and a fresh
+ * account gets an empty list rather than someone else's demo tapes.
  */
 export function buildHistory(
   projects: Project[] = loadProjects(),
@@ -178,10 +167,12 @@ export function diagnoseFlop(
     );
   }
 
-  const best = playbook.reduce((top, row) => (row.hitRate > top.hitRate ? row : top));
-  suggestions.push(
-    `Recut with a ${best.style.toLowerCase()} open — ${Math.round(best.hitRate * 100)}% hit rate for you.`,
-  );
+  if (playbook.length > 0) {
+    const best = playbook.reduce((top, row) => (row.hitRate > top.hitRate ? row : top));
+    suggestions.push(
+      `Recut with a ${best.style.toLowerCase()} open — ${Math.round(best.hitRate * 100)}% hit rate for you.`,
+    );
+  }
 
   const spare = leftovers[0];
   if (spare) {
@@ -190,12 +181,14 @@ export function diagnoseFlop(
     );
   }
 
-  const strongest = analyticsPosts.reduce((top, post) =>
-    post.views > top.views ? post : top,
-  );
-  suggestions.push(
-    `Your strongest slot this week was ${strongest.day} at ${strongest.views.toLocaleString()} views.`,
-  );
+  if (analyticsPosts.length > 0) {
+    const strongest = analyticsPosts.reduce((top, post) =>
+      post.views > top.views ? post : top,
+    );
+    suggestions.push(
+      `Your strongest slot this week was ${strongest.day} at ${strongest.views.toLocaleString()} views.`,
+    );
+  }
 
   return { reasons, suggestions };
 }

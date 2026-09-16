@@ -15,10 +15,6 @@ import { DUR, EASE, springSoft } from "@/lib/motion";
 import * as api from "@/api/client";
 import type { AnalyticsData } from "@/types";
 import {
-  analyticsPosts,
-  analyticsSummary,
-} from "@/lib/mockAnalytics";
-import {
   formatWhen,
   loadProjects,
   saveProjects,

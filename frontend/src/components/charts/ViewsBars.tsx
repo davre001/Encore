@@ -32,8 +32,8 @@ function short(value: number) {
 
 /**
  * Weekly views as vertical bars, coloured by verdict, with a dashed median rule
- * and a floating legend pill carrying the week's total. Hand-rolled SVG to match
- * ViewsArea — no charting dependency. Bars grow up from the baseline on reveal.
+ * and a floating legend pill carrying the week's total. Hand-rolled SVG — no
+ * charting dependency. Bars grow up from the baseline on reveal.
  */
 export default function ViewsBars({ posts, median }: ViewsBarsProps) {
   const reduced = useReducedMotionSafe();

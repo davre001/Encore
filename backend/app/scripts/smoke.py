@@ -36,7 +36,9 @@ FAILS: list[str] = []
 
 def check(label: str, cond: bool, detail: str = "") -> None:
     mark = "ok  " if cond else "FAIL"
-    print(f"  [{mark}] {label}" + (f" — {detail}" if detail and not cond else ""))
+    # ASCII only: on Windows stdout is cp1252 when piped, and a non-encodable
+    # character here kills the whole run's output instead of failing one check.
+    print(f"  [{mark}] {label}" + (f" - {detail}" if detail and not cond else ""))
     if not cond:
         FAILS.append(label)
 
@@ -314,6 +316,20 @@ def main() -> int:
         )
         print(f"        capabilities: {caps}")
 
+        # 1b. a brand-new account is empty, not seeded with someone's demo data
+        fresh_pb = client.get("/api/analytics/playbook").json()
+        check("fresh account has an empty playbook", fresh_pb == [], str(fresh_pb))
+        fresh_an = client.get("/api/analytics").json()
+        check("fresh account has no posts", fresh_an.get("posts") == [], str(fresh_an.get("posts")))
+        check(
+            "fresh account summary is all zeros",
+            fresh_an.get("summary", {}).get("posts") == 0
+            and fresh_an.get("summary", {}).get("totalViews") == 0
+            and fresh_an.get("summary", {}).get("median") == 0
+            and fresh_an.get("summary", {}).get("hitRate") == 0,
+            str(fresh_an.get("summary")),
+        )
+
         # 2. upload ------------------------------------------------------------
         resp = client.post(
             "/api/videos",
@@ -462,8 +478,9 @@ def main() -> int:
 
         r_left = client.post("/api/messages", json={"videoId": vid, "text": "any leftover?"}).json()
         check(
-            "leftover reply mentions the rant",
-            "exam-panic rant" in str(r_left.get("text", "")),
+            "leftover reply claims no invented leftovers",
+            "leftovers" in str(r_left.get("text", "")).lower()
+            and "exam-panic" not in str(r_left.get("text", "")).lower(),
             str(r_left.get("text")),
         )
 
@@ -629,7 +646,23 @@ def main() -> int:
         playbook_resp = client.get("/api/analytics/playbook")
         check("GET /api/analytics/playbook 200", playbook_resp.status_code == 200)
         pb_list = playbook_resp.json()
-        check("playbook list is non-empty", len(pb_list) > 0)
+        # Earned, not seeded: the only rows here are the styles this run actually
+        # decided on and posted (sections 4 and 8). A fresh account gets [].
+        check("playbook was earned by the decide/check flow", len(pb_list) > 0, str(pb_list))
+        check(
+            "no fabricated demo priors in the playbook",
+            all(
+                not (row.get("sample", 0) > 0 and not row.get("style"))
+                for row in pb_list
+            )
+            and not any(
+                row.get("note", "").startswith(
+                    ("First two seconds as a guilty line", "Shorts like these")
+                )
+                for row in pb_list
+            ),
+            str(pb_list),
+        )
 
         # 14. minds persistent memory & agent tests ----------------------------
         mind_status_resp = client.get("/api/mind/status")
@@ -677,9 +710,9 @@ def main() -> int:
 
     print()
     if FAILS:
-        print(f"SMOKE FAILED — {len(FAILS)} check(s): {FAILS}")
+        print(f"SMOKE FAILED - {len(FAILS)} check(s): {FAILS}")
         return 1
-    print("SMOKE PASSED — full pipeline walked on the deterministic fallback path.")
+    print("SMOKE PASSED - full pipeline walked on the deterministic fallback path.")
     return 0
 
 

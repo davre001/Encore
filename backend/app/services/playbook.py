@@ -1,45 +1,17 @@
 """Persistent taste memory — the "playbook" the README promises.
 
-Seeded from the frontend's src/lib/mockAnalytics.ts so a fresh install already
-knows the creator's leanings, then updated for real as moments are kept/skipped
-(record_decision) and posts land hit/mid/flop (record_outcome). Stored as a flat
-JSON list via the storage layer, so it survives restarts.
+Earned, never seeded. A fresh account starts with no playbook at all and rows
+appear only as the creator actually works: moments kept/skipped
+(record_decision) and posts landing hit/mid/flop (record_outcome). Stored as a
+flat JSON list via the storage layer, so it survives restarts.
 
-Consumed by analyze/captions to bias what gets proposed and how it's framed.
+That means a brand-new creator is never shown a hit rate for a style they have
+never posted — an empty playbook is the honest answer until there is evidence.
 """
 
 from typing import Optional
 
 from .. import storage
-
-# The four rows from mockAnalytics.ts `playbook`, verbatim. `sample`/`hitRate`
-# act as a prior; record_outcome nudges them with real observations.
-DEFAULT_PLAYBOOK: list[dict] = [
-    {
-        "style": "Confession hook",
-        "sample": 8,
-        "hitRate": 0.75,
-        "note": "First two seconds as a guilty line. Keep using.",
-    },
-    {
-        "style": "Rant",
-        "sample": 5,
-        "hitRate": 0.6,
-        "note": "Shorts like these. Save leftovers for Sunday.",
-    },
-    {
-        "style": "Story-first",
-        "sample": 4,
-        "hitRate": 0.5,
-        "note": "Better than tutorials on Reels / Shorts.",
-    },
-    {
-        "style": "Talking-head tip",
-        "sample": 6,
-        "hitRate": 0.16,
-        "note": "You skip these. Encore will stop pushing them.",
-    },
-]
 
 
 def style_for_label(label: str) -> str:
@@ -57,12 +29,8 @@ def style_for_label(label: str) -> str:
 
 
 def load_playbook() -> list[dict]:
-    """Return the playbook, seeding the defaults on first use."""
-    rows = storage.read_playbook()
-    if not rows:
-        rows = [dict(row) for row in DEFAULT_PLAYBOOK]
-        storage.write_playbook(rows)
-    return rows
+    """Every style the creator has actually accrued — empty on a fresh account."""
+    return storage.read_playbook()
 
 
 def get_row(label: str) -> Optional[dict]:
@@ -98,9 +66,10 @@ def record_decision(label: str, decision: str) -> None:
 def record_outcome(label: str, verdict: str) -> None:
     """Fold a post's hit/mid/flop verdict into the style's rolling hit rate.
 
-    Treats the seeded (sample, hitRate) as prior observations and updates the
-    running mean — only a "hit" counts toward the rate, matching the frontend's
-    notion of hitRate.
+    The style's existing (sample, hitRate) are all real prior observations, so
+    this is a running mean over the creator's own posts — only a "hit" counts
+    toward the rate, matching the frontend's notion of hitRate. A style's first
+    post therefore yields a sample of 1 and a rate of 1.0 or 0.0.
     """
     style = style_for_label(label)
     rows = load_playbook()
