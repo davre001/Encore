@@ -1,10 +1,15 @@
 ﻿"""Security utilities: password hashing and password strength detection."""
 
+import base64
 import hashlib
 import hmac
+import json
 import os
 import re
-from typing import Tuple
+import time
+from typing import Any, Tuple
+
+from ..config import AUTH_SECRET, AUTH_TOKEN_TTL_SECONDS
 
 ITERATIONS = 200_000
 COMMON_GENERIC_PASSWORDS = {
@@ -26,6 +31,51 @@ COMMON_GENERIC_PASSWORDS = {
     "monkey",
     "dragon",
 }
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode((value + padding).encode("ascii"))
+
+
+def _sign(message: str) -> str:
+    digest = hmac.new(AUTH_SECRET.encode("utf-8"), message.encode("ascii"), hashlib.sha256).digest()
+    return _b64url_encode(digest)
+
+
+def create_access_token(user_id: str) -> str:
+    """Create a compact HS256 JWT carrying the authenticated Encore user id."""
+    now = int(time.time())
+    header = {"alg": "HS256", "typ": "JWT"}
+    payload = {"sub": user_id, "iat": now, "exp": now + AUTH_TOKEN_TTL_SECONDS}
+    encoded_header = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    encoded_payload = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signing_input = f"{encoded_header}.{encoded_payload}"
+    return f"{signing_input}.{_sign(signing_input)}"
+
+
+def verify_access_token(token: str) -> dict[str, Any] | None:
+    """Return verified JWT claims, or None when the token is missing/invalid."""
+    try:
+        encoded_header, encoded_payload, signature = token.split(".", 2)
+        signing_input = f"{encoded_header}.{encoded_payload}"
+        if not hmac.compare_digest(signature, _sign(signing_input)):
+            return None
+        header = json.loads(_b64url_decode(encoded_header))
+        if header.get("alg") != "HS256":
+            return None
+        payload = json.loads(_b64url_decode(encoded_payload))
+        exp = int(payload.get("exp", 0))
+        sub = str(payload.get("sub", "")).strip()
+        if not sub or exp <= int(time.time()):
+            return None
+        return payload
+    except Exception:
+        return None
 
 
 def hash_password(password: str) -> str:

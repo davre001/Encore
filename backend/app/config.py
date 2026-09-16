@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import secrets
 import shutil
 
 from dotenv import load_dotenv
@@ -34,6 +35,16 @@ MINDS_REPLY_TIMEOUT = float(os.getenv("MINDS_REPLY_TIMEOUT", "120"))
 YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET", "")
 YOUTUBE_REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN", "")
+
+# --- Auth -------------------------------------------------------------------
+# Development gets a stable-enough secret from the Minds key when present, but
+# production should set AUTH_SECRET explicitly so sessions survive restarts.
+AUTH_SECRET = (
+    os.getenv("AUTH_SECRET", "").strip()
+    or MINDS_BUILDER_API_KEY
+    or secrets.token_urlsafe(32)
+)
+AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", str(60 * 60 * 24 * 7)))
 
 # --- Tuning ----------------------------------------------------------------
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")

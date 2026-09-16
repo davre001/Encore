@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models.schemas import (
+    AuthResponse,
     ForgotPasswordRequest,
     GoogleAuthRequest,
     MessageResponse,
@@ -16,13 +17,25 @@ from ..models.schemas import (
 )
 from ..models.user import PasswordReset, User
 from ..services.email import generate_six_digit_code, send_password_reset_email
-from ..services.security import validate_password_strength
+from ..services.security import create_access_token, validate_password_strength
 
 router = APIRouter()
 
 
-@router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def signup(body: UserSignUp, db: Session = Depends(get_db)) -> UserResponse:
+def _auth_response(user: User) -> AuthResponse:
+    profile = UserResponse(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        picture=user.picture,
+        auth_provider=user.auth_provider,
+        created_at=user.created_at,
+    )
+    return AuthResponse(user=profile, access_token=create_access_token(user.id))
+
+
+@router.post("/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+def signup(body: UserSignUp, db: Session = Depends(get_db)) -> AuthResponse:
     """Register a new user account with email and password.
 
     Validates:
@@ -68,18 +81,11 @@ def signup(body: UserSignUp, db: Session = Depends(get_db)) -> UserResponse:
     db.commit()
     db.refresh(user)
 
-    return UserResponse(
-        id=user.id,
-        email=user.email,
-        name=user.name,
-        picture=user.picture,
-        auth_provider=user.auth_provider,
-        created_at=user.created_at,
-    )
+    return _auth_response(user)
 
 
-@router.post("/signin", response_model=UserResponse)
-def signin(body: UserSignIn, db: Session = Depends(get_db)) -> UserResponse:
+@router.post("/signin", response_model=AuthResponse)
+def signin(body: UserSignIn, db: Session = Depends(get_db)) -> AuthResponse:
     """Sign in with email and password."""
     email = body.email.strip().lower()
     user = db.query(User).filter(User.email == email).first()
@@ -90,18 +96,11 @@ def signin(body: UserSignIn, db: Session = Depends(get_db)) -> UserResponse:
             detail="Invalid email or password.",
         )
 
-    return UserResponse(
-        id=user.id,
-        email=user.email,
-        name=user.name,
-        picture=user.picture,
-        auth_provider=user.auth_provider,
-        created_at=user.created_at,
-    )
+    return _auth_response(user)
 
 
-@router.post("/google", response_model=UserResponse)
-def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)) -> UserResponse:
+@router.post("/google", response_model=AuthResponse)
+def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)) -> AuthResponse:
     """Authenticate or register a user via Google Sign-In."""
     email = body.email.strip().lower()
     if not email:
@@ -132,14 +131,7 @@ def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)) -> UserR
         db.commit()
         db.refresh(user)
 
-    return UserResponse(
-        id=user.id,
-        email=user.email,
-        name=user.name,
-        picture=user.picture,
-        auth_provider=user.auth_provider,
-        created_at=user.created_at,
-    )
+    return _auth_response(user)
 
 
 @router.post("/forgot-password", response_model=MessageResponse)

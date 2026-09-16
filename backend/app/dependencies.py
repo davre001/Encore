@@ -1,19 +1,37 @@
-"""Shared FastAPI dependencies for Encore.
-
-`get_user_id` reads the `X-User-Id` header that the frontend attaches to
-every authenticated request. Routes that need per-user isolation use this
-as a dependency so every DB/storage query is automatically scoped.
-
-Returning None (unauthenticated) is allowed — endpoints decide whether to
-require a real user or fall back to unscoped data.
-"""
+"""Shared FastAPI dependencies for Encore."""
 
 from typing import Optional
-from fastapi import Header
+
+from fastapi import Depends, HTTPException, Query, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from .services.security import verify_access_token
+
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def get_user_id(x_user_id: Optional[str] = Header(default=None)) -> Optional[str]:
-    """Extract the caller's user-id from the X-User-Id request header."""
-    if x_user_id and x_user_id.strip():
-        return x_user_id.strip()
-    return None
+def get_user_id(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    access_token: Optional[str] = Query(default=None),
+) -> str:
+    """Verify the bearer token and return the authenticated Encore user id."""
+    token = access_token
+    if credentials and credentials.scheme.lower() == "bearer":
+        token = credentials.credentials
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    claims = verify_access_token(token)
+    if claims is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return str(claims["sub"])

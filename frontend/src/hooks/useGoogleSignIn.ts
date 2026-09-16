@@ -51,8 +51,7 @@ function parseJwt(token: string): User {
 
 /**
  * Google sign-in, shared by `GoogleSignInButton` and the landing hero CTA so the
- * auth flow is not duplicated per call site. Falls back to a local user when
- * NEXT_PUBLIC_GOOGLE_CLIENT_ID is unset, which is how the app runs on mock data.
+ * auth flow is not duplicated per call site.
  */
 export function useGoogleSignIn() {
   const router = useRouter();
@@ -87,19 +86,11 @@ export function useGoogleSignIn() {
     } catch (e) {
       console.warn("Backend auth sync skipped, continuing with client session", e);
     }
-    signIn(user);
-    router.push("/home");
   }
 
   function signInWithGoogle() {
     if (!clientId) {
-      finish({
-        id: "local",
-        name: "Mira Chen",
-        email: "mira@encore.app",
-        handle: "@mira.studies",
-        niche: "Study vlogs",
-      });
+      console.error("Google sign-in is not configured.");
       return;
     }
 
@@ -148,13 +139,7 @@ export function useGoogleSignIn() {
       return;
     }
 
-    finish({
-      id: "local",
-      name: "Mira Chen",
-      email: "mira@encore.app",
-      handle: "@mira.studies",
-      niche: "Study vlogs",
-    });
+    console.error("Google sign-in is not ready yet.");
   }
 
   return { signInWithGoogle };

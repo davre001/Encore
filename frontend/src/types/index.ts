@@ -10,6 +10,12 @@ export type User = {
   bio?: string;
 };
 
+export type AuthSession = {
+  user: User;
+  accessToken: string;
+  tokenType: "bearer";
+};
+
 export type MomentStatus = "pending" | "accepted" | "rejected";
 
 export type Moment = {
@@ -165,5 +171,4 @@ export type AnalyticsData = {
   summary: AnalyticsSummary;
   playbook: PlaybookRow[];
 };
-
 

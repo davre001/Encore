@@ -153,6 +153,12 @@ class UserResponse(CamelModel):
     created_at: int
 
 
+class AuthResponse(CamelModel):
+    user: UserResponse
+    access_token: str
+    token_type: str = "bearer"
+
+
 class ForgotPasswordRequest(CamelModel):
     email: str
     confirm_email: str
@@ -300,6 +306,5 @@ class AnalyticsDataResponse(CamelModel):
     posts: list[AnalyticsPostItem] = []
     summary: AnalyticsSummary = AnalyticsSummary()
     playbook: list[PlaybookRow] = []
-
 
 

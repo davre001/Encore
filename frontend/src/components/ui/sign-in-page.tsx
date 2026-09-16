@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { Eye, EyeOff, ArrowLeft, CheckCircle2, XCircle, AlertCircle } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/context/AuthContext'
@@ -32,6 +32,42 @@ const COPY = {
       'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=1400&auto=format&fit=crop&q=70',
   },
 } as const
+
+const REMEMBERED_CREDENTIALS_KEY = 'encore.rememberedCredentials'
+
+type RememberedCredentials = {
+  email: string
+  password: string
+}
+
+function readRememberedCredentials(): RememberedCredentials | null {
+  try {
+    const stored = localStorage.getItem(REMEMBERED_CREDENTIALS_KEY)
+    if (!stored) return null
+
+    const credentials = JSON.parse(stored) as Partial<RememberedCredentials>
+    if (typeof credentials.email !== 'string' || typeof credentials.password !== 'string') {
+      localStorage.removeItem(REMEMBERED_CREDENTIALS_KEY)
+      return null
+    }
+
+    return {
+      email: credentials.email,
+      password: credentials.password,
+    }
+  } catch {
+    localStorage.removeItem(REMEMBERED_CREDENTIALS_KEY)
+    return null
+  }
+}
+
+function rememberCredentials(credentials: RememberedCredentials) {
+  localStorage.setItem(REMEMBERED_CREDENTIALS_KEY, JSON.stringify(credentials))
+}
+
+function forgetRememberedCredentials() {
+  localStorage.removeItem(REMEMBERED_CREDENTIALS_KEY)
+}
 
 /** "mira.chen@x.com" -> "Mira Chen" */
 function nameFromEmail(email: string) {
@@ -71,6 +107,20 @@ export function LoginPage({ mode = 'signin' }: LoginPageProps) {
     confirmNewPassword: '',
   })
   const [showNewPassword, setShowNewPassword] = useState(false)
+
+  useEffect(() => {
+    if (mode !== 'signin') return
+
+    const remembered = readRememberedCredentials()
+    if (!remembered) return
+
+    setFormData(prev => ({
+      ...prev,
+      email: remembered.email,
+      password: remembered.password,
+      rememberMe: true,
+    }))
+  }, [mode])
 
   // Password strength detection for normal signup
   const password = formData.password
@@ -163,19 +213,27 @@ export function LoginPage({ mode = 'signin' }: LoginPageProps) {
     setLoading(true)
     try {
       if (mode === 'signup') {
-        const user = await signUp({
+        const session = await signUp({
           email,
           password: formData.password,
           name: nameFromEmail(email),
         })
-        signIn(user)
+        signIn(session, true)
         router.push('/home')
       } else {
-        const user = await signInWithCredentials({
+        const session = await signInWithCredentials({
           email,
           password: formData.password,
         })
-        signIn(user)
+        if (formData.rememberMe) {
+          rememberCredentials({
+            email,
+            password: formData.password,
+          })
+        } else {
+          forgetRememberedCredentials()
+        }
+        signIn(session, formData.rememberMe)
         router.push('/home')
       }
     } catch (err: any) {

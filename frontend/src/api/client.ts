@@ -1,5 +1,6 @@
 import type {
   AnalyticsData,
+  AuthSession,
   Clip,
   Decision,
   Message,
@@ -9,7 +10,6 @@ import type {
   PlaybookRow,
   PostCheck,
   ProjectState,
-  User,
   Video,
 } from "../types";
 
@@ -18,21 +18,30 @@ const API = "/api";
 const BACKEND =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:5000";
 
+const TOKEN_KEY = "encore.accessToken";
+
+function storedToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Auth header — all requests carry X-User-Id so the backend scopes data
-// to the authenticated creator. Reads from localStorage on the client.
+// Auth header: protected API calls carry the signed session token. The backend
+// verifies it and derives the user id from the token subject.
 // ---------------------------------------------------------------------------
 function userHeaders(): Record<string, string> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = localStorage.getItem("encore.user");
-    if (!raw) return {};
-    const user = JSON.parse(raw) as { id?: string };
-    if (user?.id) return { "X-User-Id": user.id };
-  } catch {
-    // ignore
-  }
+  const token = storedToken();
+  if (token) return { Authorization: `Bearer ${token}` };
   return {};
+}
+
+function authTokenParam(): string {
+  const token = storedToken();
+  return token ? `?access_token=${encodeURIComponent(token)}` : "";
 }
 
 async function handleResponse<T>(res: Response): Promise<T> {
@@ -68,7 +77,7 @@ export async function getVideo(videoId: string): Promise<Video> {
 
 /** Same-origin URL for the original take file — used to resume playback. */
 export function videoFileUrl(videoId: string): string {
-  return `${API}/videos/${encodeURIComponent(videoId)}/file`;
+  return `${API}/videos/${encodeURIComponent(videoId)}/file${authTokenParam()}`;
 }
 
 /** List proposed moments for a video. */
@@ -243,26 +252,26 @@ export async function signUp(input: {
   email: string;
   password: string;
   name?: string;
-}): Promise<User> {
+}): Promise<AuthSession> {
   const res = await fetch(`${API}/auth/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  return handleResponse<User>(res);
+  return handleResponse<AuthSession>(res);
 }
 
 /** Authenticate with email and password. */
 export async function signInWithCredentials(input: {
   email: string;
   password: string;
-}): Promise<User> {
+}): Promise<AuthSession> {
   const res = await fetch(`${API}/auth/signin`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  return handleResponse<User>(res);
+  return handleResponse<AuthSession>(res);
 }
 
 /** Sync Google OAuth profile with backend database. */
@@ -271,13 +280,13 @@ export async function syncGoogleUser(input: {
   name?: string;
   picture?: string;
   sub?: string;
-}): Promise<User> {
+}): Promise<AuthSession> {
   const res = await fetch(`${API}/auth/google`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  return handleResponse<User>(res);
+  return handleResponse<AuthSession>(res);
 }
 
 /** Request a 6-digit password reset verification code. */
