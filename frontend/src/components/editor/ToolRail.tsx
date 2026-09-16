@@ -27,7 +27,7 @@ const TOOLS: {
   { id: "take", label: "Take", title: "The long take", Icon: Film },
   { id: "moments", label: "Moments", title: "Standout beats (keep or skip)", Icon: BookmarkCheck },
   { id: "cuts", label: "Cuts", title: "Cuts ready to ship", Icon: Scissors },
-  { id: "caption", label: "Caption", title: "Title, caption, hashtags", Icon: Captions },
+  { id: "caption", label: "Captions", title: "On-video captions", Icon: Captions },
   { id: "mind", label: "Mind", title: "Talk to Encore", Icon: Sparkle },
 ];
 

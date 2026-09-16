@@ -16,6 +16,7 @@ import Timeline from "@/components/editor/Timeline";
 import ToolPanel from "@/components/editor/ToolPanel";
 import ToolRail, { type ToolId } from "@/components/editor/ToolRail";
 import TransportBar, {
+  type AiPermissionMode,
   type TransportEdit,
 } from "@/components/editor/TransportBar";
 import ClipContextMenu, {
@@ -185,6 +186,8 @@ export default function Editor() {
   const [clipboard, setClipboard] = useState<Clip | null>(null);
   const [past, setPast] = useState<Clip[][]>([]);
   const [future, setFuture] = useState<Clip[][]>([]);
+  const [takePast, setTakePast] = useState<TakeSegment[][]>([]);
+  const [takeFuture, setTakeFuture] = useState<TakeSegment[][]>([]);
   const [menu, setMenu] = useState<MenuState | null>(null);
 
   // Take-level edit state: multiple take segments (from splitting the main clip),
@@ -197,6 +200,8 @@ export default function Editor() {
 
   // View toggles that live on the transport bar.
   const [aiOn, setAiOn] = useState(false);
+  const [aiPermissionMode, setAiPermissionMode] =
+    useState<AiPermissionMode>("ask");
   const [compareOn, setCompareOn] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [previewRotate, setPreviewRotate] = useState(0);
@@ -273,6 +278,9 @@ export default function Editor() {
           if (proj.effects.flip !== undefined) setPreviewFlip(proj.effects.flip);
           if (proj.effects.aspect) setAspect(proj.effects.aspect);
           if (proj.effects.aiOn !== undefined) setAiOn(proj.effects.aiOn);
+          if (proj.effects.aiPermissionMode) {
+            setAiPermissionMode(proj.effects.aiPermissionMode);
+          }
           if (proj.effects.compareOn !== undefined) setCompareOn(proj.effects.compareOn);
         }
         // Restore posted/verdict state so a resumed posted project stays posted.
@@ -356,6 +364,7 @@ export default function Editor() {
             flip: previewFlip,
             aspect,
             aiOn,
+            aiPermissionMode,
             compareOn,
           },
         };
@@ -389,6 +398,7 @@ export default function Editor() {
     previewFlip,
     aspect,
     aiOn,
+    aiPermissionMode,
     compareOn,
     video,
     mediaUrl,
@@ -465,6 +475,8 @@ export default function Editor() {
     setClipboard(null);
     setPast([]);
     setFuture([]);
+    setTakePast([]);
+    setTakeFuture([]);
     setPreviewRotate(0);
     setPreviewFlip(false);
     setTime(0);
@@ -594,6 +606,7 @@ export default function Editor() {
     setFuture([]);
     setPreviewRotate(0);
     setPreviewFlip(false);
+    setAiPermissionMode("ask");
     setMediaUrl(null);
     setMediaDuration(0);
     setTakeSegments([]);
@@ -646,6 +659,16 @@ export default function Editor() {
   }
 
   function undo() {
+    if (takePast.length > 0) {
+      const prev = takePast[takePast.length - 1];
+      setTakeFuture((f) => [takeSegments, ...f].slice(0, 50));
+      setTakeSegments(prev);
+      setTakePast((p) => p.slice(0, -1));
+      setSelectedTakeId(prev[0]?.id ?? null);
+      setTime(0);
+      seek(0);
+      return;
+    }
     if (past.length === 0) return;
     const prev = past[past.length - 1];
     setFuture((f) => [clips, ...f].slice(0, 50));
@@ -654,11 +677,26 @@ export default function Editor() {
   }
 
   function redo() {
+    if (takeFuture.length > 0) {
+      const next = takeFuture[0];
+      setTakePast((p) => [...p, takeSegments].slice(-50));
+      setTakeSegments(next);
+      setTakeFuture((f) => f.slice(1));
+      setSelectedTakeId(next[0]?.id ?? null);
+      setTime(0);
+      seek(0);
+      return;
+    }
     if (future.length === 0) return;
     const next = future[0];
     setPast((p) => [...p, clips].slice(-50));
     setClips(next);
     setFuture((f) => f.slice(1));
+  }
+
+  function rememberTakeEdit() {
+    setTakePast((p) => [...p.slice(-49), takeSegments]);
+    setTakeFuture([]);
   }
 
   function handleClipMove(clipId: string, nextStart: number, nextEnd: number) {
@@ -819,16 +857,28 @@ export default function Editor() {
     pushMind("Re-ran analysis on this beat — new title and tags.");
   }
 
-  function downloadClip(id: string) {
-    const clip = clips.find((c) => c.id === id);
-    if (!clip || !mediaUrl || typeof document === "undefined") return;
+  async function downloadRenderedClip(clip: Clip) {
+    if (typeof document === "undefined") return;
+    const ready = await ensureServerClip(clip);
+    const rendered = await api.renderClip(ready.id);
+    serverClipIds.current.add(rendered.id);
+
     const link = document.createElement("a");
-    link.href = mediaUrl;
-    link.download = `${fileSlug(clip.title)}.mp4`;
+    link.href = api.clipFileUrl(rendered.id);
+    link.download = `${fileSlug(rendered.title || clip.title)}.mp4`;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    pushMind(`Downloaded “${clip.title}”.`);
+  }
+
+  function downloadClip(id: string) {
+    const clip = clips.find((c) => c.id === id);
+    if (clip) {
+      void downloadRenderedClip(clip)
+        .then(() => pushMind(`Downloaded "${clip.title}".`))
+        .catch((err: any) => pushMind(`Download failed: ${err.message || err}`));
+      return;
+    }
   }
 
   function handleRecut(clipId: string) {
@@ -986,6 +1036,7 @@ export default function Editor() {
 
     // Automatically move to the left side, aligning with the start of the timeline
     const aligned = alignSegmentsToLeft(nextSegments);
+    rememberTakeEdit();
     setTakeSegments(aligned);
 
     const rightSegInAligned = aligned.find((s) => s.id === right.id);
@@ -1013,6 +1064,7 @@ export default function Editor() {
     nextEnd: number,
     mode?: "move" | "trim-l" | "trim-r"
   ) {
+    rememberTakeEdit();
     setTakeSegments((prev) => {
       const segIndex = prev.findIndex((s) => s.id === takeId);
       if (segIndex === -1) return prev;
@@ -1071,6 +1123,7 @@ export default function Editor() {
   }
 
   function handleTakeTrim(nextIn: number, nextOut: number) {
+    rememberTakeEdit();
     setTakeIn(nextIn);
     setTakeOut(nextOut);
     const dur = Math.max(nextOut - nextIn, 0.2);
@@ -1102,6 +1155,77 @@ export default function Editor() {
     });
     setTime(0);
     seek(0);
+  }
+
+  function trimTakeToPlayhead(edge: "left" | "right") {
+    if ((!video && duration <= 0) || activeTimelineDuration <= 0) return;
+    const at = clamp(time, 0, activeTimelineDuration);
+    const sourceAt = timelineToSourceTime(
+      at,
+      takeSegments,
+      takeIn,
+      takeOut,
+      mediaDuration,
+    );
+
+    if (takeSegments.length <= 1) {
+      const currentIn = takeSegments[0]?.sourceStart ?? takeIn;
+      const currentOut = takeSegments[0]?.sourceEnd ?? (takeOut > 0 ? takeOut : duration);
+      if (edge === "left") {
+        if (sourceAt <= currentIn + 0.1) {
+          pushMind("Move the playhead further into the take before trimming the left side.");
+          return;
+        }
+        handleTakeTrim(sourceAt, currentOut);
+        pushMind(`Trimmed the left side to ${formatTime(sourceAt)}.`);
+        return;
+      }
+      if (sourceAt >= currentOut - 0.1) {
+        pushMind("Move the playhead earlier in the take before trimming the right side.");
+        return;
+      }
+      handleTakeTrim(currentIn, sourceAt);
+      pushMind(`Trimmed the right side from ${formatTime(sourceAt)}.`);
+      return;
+    }
+
+    const target =
+      takeSegments.find((s) => at >= s.start - 0.05 && at <= s.end + 0.05) ??
+      (selectedTakeId ? takeSegments.find((s) => s.id === selectedTakeId) : null);
+    if (!target) return;
+
+    const sourceStart = target.sourceStart ?? target.start;
+    const sourceEnd = target.sourceEnd ?? target.end;
+    if (edge === "left" && sourceAt <= sourceStart + 0.1) {
+      pushMind("Move the playhead further into the selected take segment before trimming left.");
+      return;
+    }
+    if (edge === "right" && sourceAt >= sourceEnd - 0.1) {
+      pushMind("Move the playhead earlier in the selected take segment before trimming right.");
+      return;
+    }
+
+    rememberTakeEdit();
+    const next = alignSegmentsToLeft(
+      takeSegments.map((segment) =>
+        segment.id === target.id
+          ? {
+              ...segment,
+              sourceStart: edge === "left" ? sourceAt : sourceStart,
+              sourceEnd: edge === "right" ? sourceAt : sourceEnd,
+            }
+          : segment,
+      ),
+    );
+    setTakeSegments(next);
+    setSelectedTakeId(target.id);
+    setTime(0);
+    seek(0);
+    pushMind(
+      edge === "left"
+        ? `Trimmed the selected segment's left side to ${formatTime(sourceAt)}.`
+        : `Trimmed the selected segment's right side from ${formatTime(sourceAt)}.`,
+    );
   }
 
   function getActivePlaybackBounds(currentTime: number): { inPoint: number; outPoint: number } {
@@ -1155,6 +1279,7 @@ export default function Editor() {
     if (!video && duration <= 0) return;
     const targetId = takeId || selectedTakeId;
     if (takeSegments.length > 1 && targetId) {
+      rememberTakeEdit();
       setTakeSegments((prev) => {
         const next = prev.filter((s) => s.id !== targetId);
         const aligned = alignSegmentsToLeft(next);
@@ -1166,6 +1291,7 @@ export default function Editor() {
       pushMind("Deleted take segment. Remaining clips aligned to timeline start.");
       return;
     }
+    rememberTakeEdit();
     handleReset();
   }
 
@@ -1271,30 +1397,24 @@ export default function Editor() {
   }
 
   function onTransportEdit(edit: TransportEdit) {
-    if (edit === "rotate") {
-      setPreviewRotate((r) => (r + 90) % 360);
-      return;
-    }
-    if (edit === "flip") {
-      setPreviewFlip((f) => !f);
-      return;
-    }
-    if (!video) return;
     switch (edit) {
-      case "split":
-        handleSplit();
+      case "undo":
+        undo();
+        break;
+      case "redo":
+        redo();
         break;
       case "delete":
         deleteTake();
         break;
-      case "duplicate":
-        duplicateTake();
-        break;
       case "cut":
-        cutTakeAtPlayhead();
+        handleSplit();
         break;
-      case "download":
-        downloadTake();
+      case "trim-left":
+        trimTakeToPlayhead("left");
+        break;
+      case "trim-right":
+        trimTakeToPlayhead("right");
         break;
     }
   }
@@ -1433,20 +1553,16 @@ export default function Editor() {
     if (target === "device") {
       setMessages((prev) => [
         ...prev,
-        youMessage(`Export “${clip.title}” to device`),
+        youMessage(`Export "${clip.title}" to device`),
       ]);
-      // A real save: hand the loaded take back through a temporary download
-      // link so the button actually produces a file on disk.
-      if (mediaUrl && typeof document !== "undefined") {
-        const link = document.createElement("a");
-        link.href = mediaUrl;
-        link.download = `${fileSlug(clip.title)}.mp4`;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+      try {
+        await downloadRenderedClip(clip);
+        pushMind(`Saved "${clip.title}" to your device.`);
+      } catch (err: any) {
+        pushMind(`Export failed: ${err.message || err}`);
       }
-      await sleep(700);
-      pushMind(`Saved “${clip.title}” to your device.`);
+      setExporting(null);
+      return;
     } else if (clip.posted) {
       pushMind(`“${clip.title}” is already live. Recut it to ship a new open.`);
     } else {
@@ -1832,9 +1948,9 @@ export default function Editor() {
             style={{ "--ar": aspectMeta.n } as CSSProperties}
             onClick={(event) => {
               if ((event.target as HTMLElement).closest(".cut__empty-hit")) return;
-              cycleAspect();
+              if (mediaUrl) togglePlay();
             }}
-            title="Click to change aspect ratio"
+            title={mediaUrl ? (playing ? "Pause preview" : "Play preview") : undefined}
           >
             {mediaUrl ? (
               <video
@@ -1920,10 +2036,7 @@ export default function Editor() {
                     <span className="cut__empty-orb" aria-hidden="true">
                       <Plus />
                     </span>
-                    <strong>Click to upload</strong>
-                    <span className="cut__empty-sub">
-                      or drag and drop a long take here
-                    </span>
+                    <strong>Import media</strong>
                   </button>
                 )}
                 <input
@@ -1957,23 +2070,26 @@ export default function Editor() {
 
         <TransportBar
           time={time}
-          duration={duration}
+          duration={activeTimelineDuration}
           playing={playing}
-          canEdit={!!video || !!mediaUrl}
-          aiOn={aiOn}
-          compareOn={compareOn}
+          canEdit={!!video || !!mediaUrl || takeSegments.length > 0}
+          canUndo={takePast.length > 0 || past.length > 0}
+          canRedo={takeFuture.length > 0 || future.length > 0}
+          aiPermissionMode={aiPermissionMode}
           fullscreen={fullscreen}
-          panelOpen={panelOpen}
-          pxPerSecond={pxPerSecond}
           onEdit={onTransportEdit}
           onRewind={() => seek(Math.max(0, time - 5))}
           onTogglePlay={togglePlay}
-          onForward={() => seek(Math.min(duration, time + 5))}
-          onToggleAi={() => setAiOn((v) => !v)}
-          onToggleCompare={() => setCompareOn((v) => !v)}
-          onPxPerSecond={setPxPerSecond}
+          onForward={() => seek(Math.min(activeTimelineDuration, time + 5))}
+          onAiPermissionMode={(mode) => {
+            setAiPermissionMode(mode);
+            pushMind(
+              mode === "auto"
+                ? "AI permission set to Auto approve."
+                : "AI permission set to Ask every time.",
+            );
+          }}
           onToggleFullscreen={toggleFullscreen}
-          onTogglePanel={() => setPanelOpen((open) => !open)}
         />
 
         <Timeline

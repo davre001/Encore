@@ -1,67 +1,54 @@
 "use client";
 
 import {
-  Columns2,
-  Copy,
-  Download,
   FastForward,
-  FlipHorizontal2,
   Maximize,
   Minimize,
-  Minus,
-  PanelLeftClose,
-  PanelLeftOpen,
   Pause,
   Play,
-  Plus,
+  Redo2,
   Rewind,
-  RotateCw,
   Scissors,
-  Split,
+  StepBack,
+  StepForward,
   Trash2,
-  Wand2,
+  Undo2,
   type LucideIcon,
 } from "lucide-react";
-import { MAX_PPS, MIN_PPS } from "./Timeline";
 
-/** m:ss for the transport clock, matching the ruler's readout. */
 function formatTime(seconds: number) {
-  const s = Math.max(0, Math.round(seconds));
-  const m = Math.floor(s / 60);
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor(s / 60) % 60;
   const r = s % 60;
-  return `${m}:${r.toString().padStart(2, "0")}`;
+  return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${r.toString().padStart(2, "0")}`;
 }
 
-/** The single edit action the toolbar can fire at the selected clip. */
 export type TransportEdit =
-  | "split"
+  | "undo"
+  | "redo"
   | "delete"
-  | "rotate"
-  | "flip"
-  | "duplicate"
   | "cut"
-  | "download";
+  | "trim-left"
+  | "trim-right";
+
+export type AiPermissionMode = "auto" | "ask";
 
 type TransportBarProps = {
   time: number;
   duration: number;
   playing: boolean;
-  /** No take loaded → the edit cluster is inert. */
   canEdit: boolean;
-  aiOn: boolean;
-  compareOn: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  aiPermissionMode: AiPermissionMode;
   fullscreen: boolean;
-  panelOpen: boolean;
-  pxPerSecond: number;
   onEdit: (edit: TransportEdit) => void;
   onRewind: () => void;
   onTogglePlay: () => void;
   onForward: () => void;
-  onToggleAi: () => void;
-  onToggleCompare: () => void;
-  onPxPerSecond: (value: number) => void;
+  onAiPermissionMode: (mode: AiPermissionMode) => void;
   onToggleFullscreen: () => void;
-  onTogglePanel: () => void;
 };
 
 type IconBtnProps = {
@@ -70,14 +57,13 @@ type IconBtnProps = {
   onClick: () => void;
   disabled?: boolean;
   active?: boolean;
-  strong?: boolean;
 };
 
-function IconBtn({ label, Icon, onClick, disabled, active, strong }: IconBtnProps) {
+function IconBtn({ label, Icon, onClick, disabled, active }: IconBtnProps) {
   return (
     <button
       type="button"
-      className={`cut__xbtn${active ? " is-active" : ""}${strong ? " cut__xbtn--strong" : ""}`}
+      className={`cut__xbtn${active ? " is-active" : ""}`}
       aria-label={label}
       aria-pressed={active ? true : undefined}
       title={label}
@@ -89,57 +75,47 @@ function IconBtn({ label, Icon, onClick, disabled, active, strong }: IconBtnProp
   );
 }
 
-/**
- * The bottom transport toolbar the skill calls for, in three clusters:
- * edit tools (left) act on the selected clip, transport (center) drives
- * playback with a m:ss / m:ss clock, and view tools (right) hold the AI /
- * compare toggles, the timeline zoom that used to sit on the timeline bar,
- * fullscreen, and the left-panel toggle.
- */
 export default function TransportBar({
   time,
   duration,
   playing,
   canEdit,
-  aiOn,
-  compareOn,
+  canUndo,
+  canRedo,
+  aiPermissionMode,
   fullscreen,
-  panelOpen,
-  pxPerSecond,
   onEdit,
   onRewind,
   onTogglePlay,
   onForward,
-  onToggleAi,
-  onToggleCompare,
-  onPxPerSecond,
+  onAiPermissionMode,
   onToggleFullscreen,
-  onTogglePanel,
 }: TransportBarProps) {
   return (
-    <div className="cut__transbar" role="toolbar" aria-label="Transport">
+    <div className="cut__transbar" role="toolbar" aria-label="Editor tools">
       <div className="cut__xcluster cut__xcluster--edit">
-        <IconBtn label="Split take at playhead" Icon={Split} onClick={() => onEdit("split")} disabled={!canEdit} />
+        <IconBtn label="Undo" Icon={Undo2} onClick={() => onEdit("undo")} disabled={!canUndo} />
+        <IconBtn label="Redo" Icon={Redo2} onClick={() => onEdit("redo")} disabled={!canRedo} />
+        <span className="cut__tool-divider" aria-hidden="true" />
         <IconBtn label="Delete take" Icon={Trash2} onClick={() => onEdit("delete")} disabled={!canEdit} />
-        <IconBtn label="Rotate 90°" Icon={RotateCw} onClick={() => onEdit("rotate")} disabled={!canEdit} />
-        <IconBtn label="Flip horizontally" Icon={FlipHorizontal2} onClick={() => onEdit("flip")} disabled={!canEdit} />
-        <IconBtn label="Duplicate take as a cut" Icon={Copy} onClick={() => onEdit("duplicate")} disabled={!canEdit} />
-        <IconBtn label="Cut a clip from the playhead" Icon={Scissors} onClick={() => onEdit("cut")} disabled={!canEdit} />
-        <IconBtn label="Download take" Icon={Download} onClick={() => onEdit("download")} disabled={!canEdit} />
+        <IconBtn label="Cut at playhead" Icon={Scissors} onClick={() => onEdit("cut")} disabled={!canEdit} />
+        <IconBtn label="Trim left side to playhead" Icon={StepBack} onClick={() => onEdit("trim-left")} disabled={!canEdit} />
+        <IconBtn label="Trim right side from playhead" Icon={StepForward} onClick={() => onEdit("trim-right")} disabled={!canEdit} />
       </div>
 
       <div className="cut__xcluster cut__xcluster--transport">
-        <IconBtn label="Back 5 seconds" Icon={Rewind} onClick={onRewind} />
+        <IconBtn label="Back 5 seconds" Icon={Rewind} onClick={onRewind} disabled={!canEdit} />
         <button
           type="button"
           className="cut__xplay"
           aria-label={playing ? "Pause" : "Play"}
           title={playing ? "Pause" : "Play"}
           onClick={onTogglePlay}
+          disabled={!canEdit}
         >
           {playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
         </button>
-        <IconBtn label="Forward 5 seconds" Icon={FastForward} onClick={onForward} />
+        <IconBtn label="Forward 5 seconds" Icon={FastForward} onClick={onForward} disabled={!canEdit} />
         <span className="cut__xclock" aria-live="off">
           <b>{formatTime(time)}</b>
           <i>/</i>
@@ -148,49 +124,32 @@ export default function TransportBar({
       </div>
 
       <div className="cut__xcluster cut__xcluster--view">
-        <IconBtn label="AI tools" Icon={Wand2} onClick={onToggleAi} active={aiOn} strong />
-        <IconBtn label="Compare view" Icon={Columns2} onClick={onToggleCompare} active={compareOn} />
-        <span className="cut__xzoom">
+        <span className="cut__ai-label">AI</span>
+        <div className="cut__ai-mode" role="group" aria-label="AI permission mode">
           <button
             type="button"
-            className="cut__xbtn"
-            aria-label="Zoom out"
-            title="Zoom out"
-            onClick={() => onPxPerSecond(Math.max(MIN_PPS, pxPerSecond - 4))}
+            className={aiPermissionMode === "auto" ? "is-active" : ""}
+            aria-pressed={aiPermissionMode === "auto"}
+            title="AI can auto approve supported actions"
+            onClick={() => onAiPermissionMode("auto")}
           >
-            <Minus aria-hidden="true" />
+            Auto approve
           </button>
-          <input
-            type="range"
-            className="cut__xzoom-range"
-            aria-label="Timeline zoom"
-            min={MIN_PPS}
-            max={MAX_PPS}
-            step={1}
-            value={pxPerSecond}
-            onChange={(event) => onPxPerSecond(Number(event.target.value))}
-          />
           <button
             type="button"
-            className="cut__xbtn"
-            aria-label="Zoom in"
-            title="Zoom in"
-            onClick={() => onPxPerSecond(Math.min(MAX_PPS, pxPerSecond + 4))}
+            className={aiPermissionMode === "ask" ? "is-active" : ""}
+            aria-pressed={aiPermissionMode === "ask"}
+            title="AI must ask before applying supported actions"
+            onClick={() => onAiPermissionMode("ask")}
           >
-            <Plus aria-hidden="true" />
+            Ask every time
           </button>
-        </span>
+        </div>
         <IconBtn
           label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
           Icon={fullscreen ? Minimize : Maximize}
           onClick={onToggleFullscreen}
           active={fullscreen}
-        />
-        <IconBtn
-          label={panelOpen ? "Hide panel" : "Show panel"}
-          Icon={panelOpen ? PanelLeftClose : PanelLeftOpen}
-          onClick={onTogglePanel}
-          active={!panelOpen}
         />
       </div>
     </div>

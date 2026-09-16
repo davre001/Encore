@@ -13,35 +13,35 @@ function waitFor(
 ): Promise<boolean> {
   return new Promise((resolve) => {
     let done = false;
-    const finish = (ok: boolean) => {
+    const finish = (success: boolean) => {
       if (done) return;
       done = true;
-      el.removeEventListener(event, ok as unknown as EventListener);
-      el.removeEventListener("error", err);
+      el.removeEventListener(event, onSuccess);
+      el.removeEventListener("error", onError);
       window.clearTimeout(timer);
-      resolve(ok);
+      resolve(success);
     };
-    const ok = () => finish(true);
-    const err = () => finish(false);
+    const onSuccess = () => finish(true);
+    const onError = () => finish(false);
     const timer = window.setTimeout(() => finish(false), timeoutMs);
-    el.addEventListener(event, ok, { once: true });
-    el.addEventListener("error", err, { once: true });
+    el.addEventListener(event, onSuccess, { once: true });
+    el.addEventListener("error", onError, { once: true });
   });
 }
 
 function seekTo(video: HTMLVideoElement, t: number): Promise<boolean> {
   return new Promise((resolve) => {
     let done = false;
-    const finish = (ok: boolean) => {
+    const finish = (success: boolean) => {
       if (done) return;
       done = true;
-      video.removeEventListener("seeked", ok as unknown as EventListener);
+      video.removeEventListener("seeked", onSeeked);
       window.clearTimeout(timer);
-      resolve(ok);
+      resolve(success);
     };
-    const ok = () => finish(true);
+    const onSeeked = () => finish(true);
     const timer = window.setTimeout(() => finish(false), 2500);
-    video.addEventListener("seeked", ok, { once: true });
+    video.addEventListener("seeked", onSeeked, { once: true });
     try {
       video.currentTime = t;
     } catch {

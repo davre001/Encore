@@ -190,6 +190,7 @@ class ProjectEffects(CamelModel):
     flip: bool = False
     aspect: str = "16:9"
     ai_on: bool = False
+    ai_permission_mode: Literal["auto", "ask"] = "ask"
     compare_on: bool = False
 
 
@@ -306,5 +307,4 @@ class AnalyticsDataResponse(CamelModel):
     posts: list[AnalyticsPostItem] = []
     summary: AnalyticsSummary = AnalyticsSummary()
     playbook: list[PlaybookRow] = []
-
 

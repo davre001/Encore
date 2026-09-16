@@ -80,6 +80,11 @@ export function videoFileUrl(videoId: string): string {
   return `${API}/videos/${encodeURIComponent(videoId)}/file${authTokenParam()}`;
 }
 
+/** Download URL for a rendered clip file. */
+export function clipFileUrl(clipId: string): string {
+  return `${API}/clips/${encodeURIComponent(clipId)}/file${authTokenParam()}`;
+}
+
 /** List proposed moments for a video. */
 export async function listMoments(videoId: string): Promise<Moment[]> {
   const res = await fetch(`${API}/moments/${encodeURIComponent(videoId)}`, {

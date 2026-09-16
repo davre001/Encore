@@ -1,8 +1,15 @@
 "use client";
 
-import { type FormEvent } from "react";
+import { type ChangeEvent, type FormEvent } from "react";
 import { ArrowUp } from "lucide-react";
-import type { Clip, Message, Moment, Video } from "@/types";
+import type {
+  CaptionLanguage,
+  CaptionTrack,
+  Clip,
+  Message,
+  Moment,
+  Video,
+} from "@/types";
 import type { ToolId } from "@/components/editor/ToolRail";
 import { formatSpan, formatTime } from "@/lib/timecode";
 
@@ -14,12 +21,17 @@ type ToolPanelProps = {
   clips: Clip[];
   messages: Message[];
   selectedClipId: string | null;
+  captionTracks: CaptionTrack[];
   prompt: string;
   onPrompt: (value: string) => void;
   onSend: (text: string) => void;
   onReset: () => void;
   onPickClip: (id: string) => void;
   onClipChange: (clip: Clip) => void;
+  onGenerateCaptions: (clipId: string, language: CaptionLanguage) => void;
+  onCaptionTrackChange: (track: CaptionTrack) => void;
+  onCaptionFontFile: (trackId: string, file: File | null) => void;
+  onCaptionFontUrl: (trackId: string, url: string) => void;
   onClipContext: (id: string, x: number, y: number) => void;
   onSeek: (seconds: number) => void;
   onRecut: (id: string) => void;
@@ -31,14 +43,37 @@ const HEADINGS: Record<ToolId, string> = {
   take: "Take",
   moments: "Moments",
   cuts: "Cuts",
-  caption: "Caption",
+  caption: "Captions",
   mind: "Mind",
 };
+
+const CAPTION_LANGUAGES: { id: CaptionLanguage; label: string }[] = [
+  { id: "en", label: "English" },
+  { id: "fr", label: "French" },
+  { id: "es", label: "Spanish" },
+  { id: "pt", label: "Portuguese" },
+  { id: "de", label: "German" },
+  { id: "it", label: "Italian" },
+  { id: "ar", label: "Arabic" },
+  { id: "hi", label: "Hindi" },
+];
+
+const FONT_CHOICES = [
+  "Inter",
+  "Arial",
+  "Georgia",
+  "Impact",
+  "Montserrat",
+  "Poppins",
+  "Roboto",
+];
 
 export default function ToolPanel(props: ToolPanelProps) {
   const { tool, video, busy, clips, selectedClipId } = props;
 
   const selectedClip = clips.find((clip) => clip.id === selectedClipId) ?? null;
+  const selectedCaptionTrack =
+    selectedClip && props.captionTracks.find((track) => track.clipId === selectedClip.id);
 
   const pendingMoments = props.moments.filter((m) => m.status === "pending");
   const count =

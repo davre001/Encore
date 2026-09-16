@@ -96,12 +96,41 @@ export type TakeSegment = {
   sourceEnd?: number;
 };
 
+export type CaptionLanguage =
+  | "en"
+  | "fr"
+  | "es"
+  | "pt"
+  | "de"
+  | "it"
+  | "ar"
+  | "hi";
+
+export type CaptionSegment = {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+};
+
+export type CaptionTrack = {
+  id: string;
+  clipId: string;
+  language: CaptionLanguage;
+  fontFamily: string;
+  fontSource?: string;
+  fontUrl?: string;
+  segments: CaptionSegment[];
+};
+
 export type ProjectEffects = {
   rotate: number;
   flip: boolean;
   aspect: string;
   aiOn?: boolean;
+  aiPermissionMode?: "auto" | "ask";
   compareOn?: boolean;
+  captionTracks?: CaptionTrack[];
 };
 
 export type ProjectState = {
@@ -171,4 +200,3 @@ export type AnalyticsData = {
   summary: AnalyticsSummary;
   playbook: PlaybookRow[];
 };
-

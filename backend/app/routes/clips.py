@@ -1,7 +1,10 @@
 """Clips — list a video's cuts, create and edit them, per-user isolated."""
 
+import mimetypes
+import os
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 
 from ..dependencies import get_user_id
 from ..models.schemas import Clip, ClipCreate, ClipUpdate
@@ -36,8 +39,38 @@ async def render_clip(
     video = storage.get_video(record["videoId"])
     src_path = video.get("srcPath") if video else None
     if src_path:
-        ffmpeg.render_clip(src_path, record["start"], record["end"])
+        rendered = ffmpeg.render_clip(src_path, record["start"], record["end"])
+        record = storage.update_clip(clip_id, {"renderPath": rendered}) or record
     return Clip.model_validate(record)
+
+
+@router.get("/{clip_id}/file")
+async def get_clip_file(
+    clip_id: str,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> FileResponse:
+    record = storage.get_clip(clip_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if user_id and record.get("userId") and record["userId"] != user_id:
+        raise HTTPException(status_code=404, detail="clip not found")
+
+    path = record.get("renderPath")
+    if not path or not os.path.isfile(path):
+        video = storage.get_video(record["videoId"])
+        src_path = video.get("srcPath") if video else None
+        if not src_path:
+            raise HTTPException(status_code=404, detail="clip file not found")
+        path = ffmpeg.render_clip(src_path, record["start"], record["end"])
+        storage.update_clip(clip_id, {"renderPath": path})
+
+    media_type = mimetypes.guess_type(path)[0] or "video/mp4"
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=f"{clip_id}.mp4",
+        content_disposition_type="attachment",
+    )
 
 
 @router.post("", response_model=Clip)
@@ -74,11 +107,11 @@ async def create_clip(
     )
     record = clip.model_dump(by_alias=True)
     record["userId"] = user_id
-    storage.save_clip(record)
 
     src_path = video.get("srcPath")
     if src_path:
-        ffmpeg.render_clip(src_path, clip.start, clip.end)
+        record["renderPath"] = ffmpeg.render_clip(src_path, clip.start, clip.end)
+    storage.save_clip(record)
     return clip
 
 
@@ -109,5 +142,6 @@ async def update_clip(
         video = storage.get_video(updated["videoId"])
         src_path = video.get("srcPath") if video else None
         if src_path:
-            ffmpeg.render_clip(src_path, updated["start"], updated["end"])
+            rendered = ffmpeg.render_clip(src_path, updated["start"], updated["end"])
+            updated = storage.update_clip(clip_id, {"renderPath": rendered}) or updated
     return Clip.model_validate(updated)
