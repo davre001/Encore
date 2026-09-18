@@ -1,6 +1,7 @@
 import type {
   AnalyticsData,
   AnalysisStatus,
+  AiSettings,
   AuthSession,
   CaptionLanguage,
   CaptionTrack,
@@ -102,6 +103,25 @@ export async function getAnalysisStatus(videoId: string): Promise<AnalysisStatus
     headers: userHeaders(),
   });
   return handleResponse<AnalysisStatus>(res);
+}
+
+/** Persisted creator-level AI permission mode. */
+export async function getAiSettings(): Promise<AiSettings> {
+  const res = await fetch(`${API}/settings/ai`, {
+    headers: userHeaders(),
+  });
+  return handleResponse<AiSettings>(res);
+}
+
+export async function updateAiSettings(
+  aiPermissionMode: AiSettings["aiPermissionMode"]
+): Promise<AiSettings> {
+  const res = await fetch(`${API}/settings/ai`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...userHeaders() },
+    body: JSON.stringify({ aiPermissionMode }),
+  });
+  return handleResponse<AiSettings>(res);
 }
 
 /** Clear proposed moments and rerun AI analysis for an existing upload. */

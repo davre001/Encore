@@ -76,6 +76,29 @@ const ANALYSIS_PROGRESS: Record<AnalysisStatus["stage"], number> = {
   error: 100,
 };
 
+const SLASH_COMMANDS = [
+  {
+    command: "/redo",
+    label: "Regenerate moments",
+    hint: "Clear current moments and run detection again.",
+  },
+  {
+    command: "/permissions",
+    label: "Show permission mode",
+    hint: "List permission commands and the current mode.",
+  },
+  {
+    command: "/permissions auto",
+    label: "Auto approve",
+    hint: "Let AI accept the best moments and prepare the best cut.",
+  },
+  {
+    command: "/permissions manual",
+    label: "Ask every time",
+    hint: "Review moments and actions before they happen.",
+  },
+];
+
 function MomentPreview({
   mediaUrl,
   moment,
@@ -143,6 +166,7 @@ function MomentPreview({
 
 export default function ToolPanel(props: ToolPanelProps) {
   const { tool, video, busy, clips, selectedClipId } = props;
+  const askInputRef = useRef<HTMLInputElement>(null);
 
   const selectedClip = clips.find((clip) => clip.id === selectedClipId) ?? null;
   const selectedCaptionTrack = selectedClip
@@ -156,6 +180,36 @@ export default function ToolPanel(props: ToolPanelProps) {
       : tool === "moments"
         ? (pendingMoments.length > 0 ? pendingMoments.length : props.moments.length)
         : undefined;
+  const commandQuery = props.prompt.startsWith("/")
+    ? props.prompt.slice(1).toLowerCase()
+    : "";
+  const commandMenuOpen = tool === "mind" && props.prompt.startsWith("/");
+  const visibleCommands = SLASH_COMMANDS.filter((item) => {
+    if (!commandQuery) return true;
+    return (
+      item.command.slice(1).toLowerCase().includes(commandQuery) ||
+      item.label.toLowerCase().includes(commandQuery)
+    );
+  });
+
+  useEffect(() => {
+    if (tool !== "mind") return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "/") return;
+      const target = event.target as HTMLElement | null;
+      const typing =
+        !!target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+      if (typing) return;
+      event.preventDefault();
+      props.onPrompt("/");
+      window.setTimeout(() => askInputRef.current?.focus(), 0);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [props, tool]);
 
   return (
     <section className="cut__panel" aria-label={`${HEADINGS[tool]} panel`}>
@@ -582,7 +636,32 @@ export default function ToolPanel(props: ToolPanelProps) {
                 if (next) props.onSend(next);
               }}
             >
+              {commandMenuOpen ? (
+                <div className="cut__command-menu" role="listbox">
+                  {visibleCommands.length > 0 ? (
+                    visibleCommands.map((item) => (
+                      <button
+                        key={item.command}
+                        type="button"
+                        className="cut__command-option"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          props.onPrompt(item.command);
+                          window.setTimeout(() => askInputRef.current?.focus(), 0);
+                        }}
+                      >
+                        <b>{item.command}</b>
+                        <span>{item.label}</span>
+                        <small>{item.hint}</small>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="cut__command-empty">No command found</p>
+                  )}
+                </div>
+              ) : null}
               <input
+                ref={askInputRef}
                 value={props.prompt}
                 onChange={(event) => props.onPrompt(event.target.value)}
                 placeholder="Ask Encore…"

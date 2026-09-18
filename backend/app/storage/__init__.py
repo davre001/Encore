@@ -152,6 +152,37 @@ def update_moment(moment_id: str, patch: dict) -> Optional[dict]:
     return _update("moments", moment_id, patch)
 
 
+# --- AI settings -----------------------------------------------------------
+def get_ai_settings(user_id: Optional[str]) -> dict:
+    key = user_id or "anonymous"
+    rows = _list_by("ai_settings", "userId", key)
+    if rows:
+        return rows[-1]
+    return {
+        "id": f"ais_{key}",
+        "userId": key,
+        "aiPermissionMode": "ask",
+        "updatedAt": now_ms(),
+    }
+
+
+def save_ai_settings(user_id: Optional[str], patch: dict) -> dict:
+    key = user_id or "anonymous"
+    current = get_ai_settings(user_id)
+    record = {
+        **current,
+        **patch,
+        "id": current.get("id") or f"ais_{key}",
+        "userId": key,
+        "updatedAt": now_ms(),
+    }
+    with _LOCK:
+        rows = [r for r in _read("ai_settings") if r.get("userId") != key]
+        rows.append(record)
+        _write("ai_settings", rows)
+    return record
+
+
 # --- analysis status -------------------------------------------------------
 def save_analysis_status(video_id: str, status: dict) -> dict:
     record = {

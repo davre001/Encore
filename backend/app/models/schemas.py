@@ -230,6 +230,16 @@ class MessageResponse(CamelModel):
     status: str = "ok"
 
 
+class AiSettings(CamelModel):
+    user_id: Optional[str] = None
+    ai_permission_mode: Literal["auto", "ask"] = "ask"
+    updated_at: int
+
+
+class AiSettingsUpdate(CamelModel):
+    ai_permission_mode: Literal["auto", "ask"]
+
+
 # --- Project schemas -------------------------------------------------------
 class TakeSegmentSchema(CamelModel):
     id: str

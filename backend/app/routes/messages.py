@@ -55,7 +55,7 @@ async def send_message(
     storage.save_message({**user_msg, "userId": user_id})
 
     latest = _latest_check(body.video_id)
-    context_parts = [_editor_context(body.video_id)]
+    context_parts = [_editor_context(body.video_id, user_id)]
     if latest:
         context_parts.append(f"Latest post check: {latest['verdict']} at {latest['views']:,} views.")
     context = "\n".join(part for part in context_parts if part)
@@ -121,9 +121,10 @@ def _merged_history(video_id: str, user_id: Optional[str]) -> list[dict]:
     return out[-50:]
 
 
-def _editor_context(video_id: str) -> str:
+def _editor_context(video_id: str, user_id: Optional[str]) -> str:
     video = storage.get_video(video_id)
     status = storage.get_analysis_status(video_id)
+    ai_settings = storage.get_ai_settings(user_id)
     moments = storage.list_moments(video_id)
     clips = storage.list_clips(video_id)
     posts = storage.list_posts(video_id)
@@ -136,6 +137,13 @@ def _editor_context(video_id: str) -> str:
     if status:
         lines.append(
             f"Analysis: {status.get('stage')} - {status.get('message')}"
+        )
+    if ai_settings:
+        mode = ai_settings.get("aiPermissionMode", "ask")
+        lines.append(
+            "AI permission mode: "
+            + ("Auto approve" if mode == "auto" else "Ask every time")
+            + "."
         )
     if moments:
         pending = sum(1 for item in moments if item.get("status") == "pending")

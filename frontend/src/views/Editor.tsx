@@ -36,7 +36,7 @@ import type {
 import { WORKFLOW_STEPS, workflowIndex } from "@/lib/studioAssets";
 import * as api from "@/api/client";
 import { extractFrames, extractPeaks, type Frame } from "@/lib/mediaGraphics";
-import { formatSpan, formatTime } from "@/lib/timecode";
+import { formatTime } from "@/lib/timecode";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -145,10 +145,19 @@ function buildCaptionSegments(
 
 function isMomentRegenerationPrompt(text: string) {
   const lower = text.toLowerCase();
+  if (lower.trim() === "/redo") return true;
   return (
     /\b(retry|rerun|re-run|regenerate|redo|refresh)\b/.test(lower) &&
     /\b(moment|moments|beat|beats|cut|cuts)\b/.test(lower)
   );
+}
+
+function parsePermissionCommand(text: string): "auto" | "ask" | "help" | null {
+  const lower = text.trim().toLowerCase();
+  if (!lower.startsWith("/permissions")) return null;
+  if (/\b(auto|auto-approve|approve)\b/.test(lower)) return "auto";
+  if (/\b(manual|ask|permission)\b/.test(lower)) return "ask";
+  return "help";
 }
 
 function timedOutAnalysisStatus(videoId: string): AnalysisStatus {
@@ -485,6 +494,13 @@ export default function Editor() {
     return () => window.clearInterval(tick);
   }, []);
 
+  useEffect(() => {
+    api
+      .getAiSettings()
+      .then((settings) => setAiPermissionMode(settings.aiPermissionMode))
+      .catch(() => {});
+  }, []);
+
   // Release the blob when it is swapped out or the editor unmounts.
   useEffect(() => {
     if (!mediaUrl || !mediaUrl.startsWith("blob:")) return;
@@ -534,6 +550,18 @@ export default function Editor() {
     const targetId = video?.id || projectId || "notebook";
     void api.saveEditorEvent(targetId, text).catch(() => {});
   }, [projectId, video?.id]);
+
+  async function setPermissionMode(mode: AiPermissionMode, announce = false) {
+    setAiPermissionMode(mode);
+    await api.updateAiSettings(mode).catch(() => null);
+    if (announce) {
+      pushMind(
+        mode === "auto"
+          ? "Permission mode set to Auto approve.\n\nI will accept the strongest moments and prepare the best cut automatically after analysis."
+          : "Permission mode set to Ask every time.\n\nI will wait for you to approve moments and posting actions.",
+      );
+    }
+  }
 
   /* ---- Take ---- */
 
@@ -660,9 +688,13 @@ export default function Editor() {
       setBusy(false);
 
       if (foundMoments.length > 0) {
-        pushMind(
-          `Found ${foundMoments.length} standout moments. Review each beat: click Keep to turn it into a clip, or Skip.`,
-        );
+        if (aiPermissionMode === "auto") {
+          await autoApproveMoments(foundMoments);
+        } else {
+          pushMind(
+            `Found ${foundMoments.length} standout moments. Review each beat: click Keep to turn it into a clip, or Skip.`,
+          );
+        }
       } else {
         const finalStatus =
           latestStatus?.done
@@ -714,6 +746,41 @@ export default function Editor() {
     } catch (err: any) {
       pushMind(`Failed to ${decision} moment: ${err.message || err}`);
     }
+  }
+
+  async function autoApproveMoments(nextMoments: Moment[]) {
+    const pending = nextMoments.filter((moment) => moment.status === "pending").slice(0, 3);
+    if (!pending.length) return;
+
+    pushMind(
+      `Auto approve is on.\n\nAccepting the ${pending.length} strongest moment${
+        pending.length === 1 ? "" : "s"
+      }, creating cuts, and preparing the best one to post.`,
+    );
+
+    let nextClips: Clip[] = [];
+    for (const moment of pending) {
+      const updated = await api.decideMoment(moment.id, "accept");
+      setMoments((prev) => prev.map((m) => (m.id === moment.id ? updated : m)));
+    }
+
+    const vidId = video?.id || pending[0]?.videoId;
+    if (vidId) {
+      nextClips = await api.listClips(vidId);
+      setClips(nextClips);
+      serverClipIds.current = new Set(nextClips.map((clip) => clip.id));
+    }
+
+    const bestClip =
+      nextClips.find((clip) => pending.some((moment) => moment.id === clip.momentId)) ??
+      nextClips.find((clip) => !clip.posted) ??
+      null;
+    if (!bestClip) return;
+
+    setSelectedClipId(bestClip.id);
+    await handleGenerateCaptions(bestClip.id, "en");
+    await shipToYouTube(bestClip);
+    setTool("cuts");
   }
 
   function handleReset() {
@@ -775,10 +842,6 @@ export default function Editor() {
 
   function handlePickClip(clipId: string) {
     setSelectedClipId(clipId);
-    const clip = clips.find((item) => item.id === clipId);
-    if (clip) {
-      pushMind(`Selected cut "${clip.title}" at ${formatSpan(clip.start, clip.end)}.`);
-    }
   }
 
   function handleClipChange(next: Clip) {
@@ -806,7 +869,6 @@ export default function Editor() {
       setClips((prev) =>
         prev.map((clip) => (clip.id === clipId ? updated : clip)),
       );
-      pushMind(`Removed ${hashtag} from "${updated.title}".`);
     } catch (err: any) {
       setClips(previous);
       pushMind(`Couldn't remove ${hashtag}: ${err.message || err}`);
@@ -1721,7 +1783,8 @@ export default function Editor() {
    * publish. Returns the server clip whose id the post endpoint will accept.
    */
   async function ensureServerClip(clip: Clip): Promise<Clip> {
-    if (!video) throw new Error("Upload a take before publishing.");
+    const clipVideoId = video?.id || clip.videoId;
+    if (!clipVideoId) throw new Error("Upload a take before publishing.");
     if (serverClipIds.current.has(clip.id)) {
       const patched = await api.updateClip(clip.id, {
         title: clip.title,
@@ -1735,7 +1798,7 @@ export default function Editor() {
       return patched;
     }
     const created = await api.createClip({
-      videoId: video.id,
+      videoId: clipVideoId,
       start: clip.start,
       end: clip.end,
       title: clip.title,
@@ -1919,11 +1982,20 @@ export default function Editor() {
       setMoments(foundMoments);
 
       if (foundMoments.length > 0) {
-        pushMind(
-          `Done. I regenerated ${foundMoments.length} moment${
-            foundMoments.length === 1 ? "" : "s"
-          } and replaced the old set.`,
-        );
+        if (aiPermissionMode === "auto") {
+          pushMind(
+            `Done. I regenerated ${foundMoments.length} moment${
+              foundMoments.length === 1 ? "" : "s"
+            } and replaced the old set.`,
+          );
+          await autoApproveMoments(foundMoments);
+        } else {
+          pushMind(
+            `Done. I regenerated ${foundMoments.length} moment${
+              foundMoments.length === 1 ? "" : "s"
+            } and replaced the old set.`,
+          );
+        }
       } else {
         const finalStatus =
           latestStatus?.done
@@ -1968,6 +2040,20 @@ export default function Editor() {
     setPrompt("");
     setMessages((prev) => [...prev, youMessage(text)]);
     const targetId = video?.id || projectId || "notebook";
+
+    const permissionCommand = parsePermissionCommand(text);
+    if (permissionCommand) {
+      await api.saveEditorEvent(targetId, text, "you").catch(() => null);
+      if (permissionCommand === "help") {
+        pushMind(
+          "Permission commands:\n\n/permissions auto\n/permissions manual\n\nCurrent mode: " +
+            (aiPermissionMode === "auto" ? "Auto approve" : "Ask every time"),
+        );
+      } else {
+        await setPermissionMode(permissionCommand, true);
+      }
+      return;
+    }
 
     if (isMomentRegenerationPrompt(text)) {
       await regenerateMomentsFromChat(text);
@@ -2466,12 +2552,7 @@ export default function Editor() {
           onTogglePlay={togglePlay}
           onForward={() => seek(Math.min(activeTimelineDuration, time + 5))}
           onAiPermissionMode={(mode) => {
-            setAiPermissionMode(mode);
-            pushMind(
-              mode === "auto"
-                ? "AI permission set to Auto approve."
-                : "AI permission set to Ask every time.",
-            );
+            void setPermissionMode(mode, false);
           }}
           onToggleFullscreen={toggleFullscreen}
         />

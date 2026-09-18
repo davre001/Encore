@@ -46,6 +46,12 @@ export type AnalysisStatus = {
   done: boolean;
 };
 
+export type AiSettings = {
+  userId?: string | null;
+  aiPermissionMode: "auto" | "ask";
+  updatedAt: number;
+};
+
 export type Clip = {
   id: string;
   momentId: string;
