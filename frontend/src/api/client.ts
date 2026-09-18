@@ -104,6 +104,18 @@ export async function getAnalysisStatus(videoId: string): Promise<AnalysisStatus
   return handleResponse<AnalysisStatus>(res);
 }
 
+/** Clear proposed moments and rerun AI analysis for an existing upload. */
+export async function retryAnalysis(videoId: string): Promise<AnalysisStatus> {
+  const res = await fetch(
+    `${API}/videos/${encodeURIComponent(videoId)}/analysis/retry`,
+    {
+      method: "POST",
+      headers: userHeaders(),
+    }
+  );
+  return handleResponse<AnalysisStatus>(res);
+}
+
 /** Accept or reject a moment. */
 export async function decideMoment(
   momentId: string,
@@ -240,6 +252,20 @@ export async function sendMessage(
     method: "POST",
     headers: { "Content-Type": "application/json", ...userHeaders() },
     body: JSON.stringify({ videoId, text }),
+  });
+  return handleResponse<Message>(res);
+}
+
+/** Persist an editor event into the AI chat/memory thread. */
+export async function saveEditorEvent(
+  videoId: string,
+  text: string,
+  role: "mind" | "you" = "mind"
+): Promise<Message> {
+  const res = await fetch(`${API}/messages/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...userHeaders() },
+    body: JSON.stringify({ videoId, text, role }),
   });
   return handleResponse<Message>(res);
 }

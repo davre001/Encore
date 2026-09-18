@@ -102,6 +102,43 @@ async def upload_video(
     return video
 
 
+@router.post("/{video_id}/analysis/retry", response_model=AnalysisStatus)
+async def retry_analysis(
+    video_id: str,
+    background_tasks: BackgroundTasks,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> AnalysisStatus:
+    record = storage.get_video(video_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="video not found")
+    if user_id and record.get("userId") and record["userId"] != user_id:
+        raise HTTPException(status_code=404, detail="video not found")
+    src_path = record.get("srcPath")
+    if not src_path or not os.path.isfile(src_path):
+        raise HTTPException(status_code=404, detail="video file not found")
+
+    storage.save_moments(video_id, [])
+    _status(video_id, "queued", "Regenerating moments from the video.")
+    storage.save_message(
+        {
+            "id": storage.new_id("msg"),
+            "role": "mind",
+            "text": "Regenerating moments from the video.",
+            "createdAt": storage.now_ms(),
+            "videoId": video_id,
+            "userId": user_id,
+        }
+    )
+    background_tasks.add_task(
+        _propose_moments,
+        video_id,
+        src_path,
+        float(record.get("duration") or 0),
+    )
+    status = storage.get_analysis_status(video_id)
+    return AnalysisStatus.model_validate(status)
+
+
 @router.get("/{video_id}/analysis", response_model=AnalysisStatus)
 async def get_analysis_status(
     video_id: str,

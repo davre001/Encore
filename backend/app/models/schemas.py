@@ -111,6 +111,12 @@ class MessageCreate(CamelModel):
     text: str
 
 
+class MessageEventCreate(CamelModel):
+    video_id: str
+    text: str
+    role: Role = "mind"
+
+
 class ClipCreate(CamelModel):
     """Create a cut from an arbitrary range of the take (manual editing tools).
 

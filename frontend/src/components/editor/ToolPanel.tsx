@@ -23,6 +23,7 @@ type ToolPanelProps = {
   clips: Clip[];
   messages: Message[];
   chatBusy: boolean;
+  regeneratingMoments: boolean;
   selectedClipId: string | null;
   captionTracks: CaptionTrack[];
   fontChoices: string[];
@@ -62,6 +63,18 @@ const CAPTION_LANGUAGES: { id: CaptionLanguage; label: string }[] = [
   { id: "ar", label: "Arabic" },
   { id: "hi", label: "Hindi" },
 ];
+
+const ANALYSIS_PROGRESS: Record<AnalysisStatus["stage"], number> = {
+  queued: 8,
+  uploaded: 14,
+  thinking: 26,
+  transcribing: 44,
+  watching: 68,
+  generating: 86,
+  complete: 100,
+  empty: 100,
+  error: 100,
+};
 
 function MomentPreview({
   mediaUrl,
@@ -544,6 +557,21 @@ export default function ToolPanel(props: ToolPanelProps) {
                 <p className="cut__thinking" aria-live="polite">
                   Thinking...
                 </p>
+              ) : null}
+              {props.regeneratingMoments && props.analysisStatus ? (
+                <div className="cut__chat-progress" aria-live="polite">
+                  <div className="cut__chat-progress-top">
+                    <span>{props.analysisStatus.message}</span>
+                    <b>{ANALYSIS_PROGRESS[props.analysisStatus.stage]}%</b>
+                  </div>
+                  <span className="cut__chat-progress-track">
+                    <i
+                      style={{
+                        width: `${ANALYSIS_PROGRESS[props.analysisStatus.stage]}%`,
+                      }}
+                    />
+                  </span>
+                </div>
               ) : null}
             </div>
             <form

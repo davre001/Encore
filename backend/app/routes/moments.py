@@ -6,11 +6,14 @@ to the playbook so taste accrues. The endpoint returns the updated Moment; the
 new clip surfaces via GET /api/clips/{videoId}.
 """
 
-from fastapi import APIRouter, HTTPException
+from typing import Optional
 
+from fastapi import APIRouter, Depends, HTTPException
+
+from ..dependencies import get_user_id
 from ..models.schemas import Clip, Moment, MomentDecision
 from .. import storage
-from ..services import captions, ffmpeg, playbook
+from ..services import captions, ffmpeg, minds, playbook
 
 router = APIRouter()
 
@@ -30,7 +33,11 @@ async def list_moments(video_id: str) -> list[Moment]:
 
 
 @router.post("/{moment_id}/decide", response_model=Moment)
-async def decide_moment(moment_id: str, body: MomentDecision) -> Moment:
+async def decide_moment(
+    moment_id: str,
+    body: MomentDecision,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> Moment:
     record = storage.get_moment(moment_id)
     if record is None:
         raise HTTPException(status_code=404, detail="moment not found")
@@ -43,6 +50,19 @@ async def decide_moment(moment_id: str, body: MomentDecision) -> Moment:
 
     if accepted:
         _build_clip(record)
+
+    event_text = (
+        f"Kept moment \"{record.get('label', 'Moment')}\" and created a cut."
+        if accepted
+        else f"Skipped moment \"{record.get('label', 'Moment')}\"."
+    )
+    saved = minds.save_chat_message(
+        role="mind",
+        text=event_text,
+        video_id=record.get("videoId"),
+        user_id=user_id,
+    )
+    storage.save_message({**saved, "userId": user_id})
 
     return Moment.model_validate(updated)
 

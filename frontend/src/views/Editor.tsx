@@ -36,7 +36,7 @@ import type {
 import { WORKFLOW_STEPS, workflowIndex } from "@/lib/studioAssets";
 import * as api from "@/api/client";
 import { extractFrames, extractPeaks, type Frame } from "@/lib/mediaGraphics";
-import { formatTime } from "@/lib/timecode";
+import { formatSpan, formatTime } from "@/lib/timecode";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -143,6 +143,26 @@ function buildCaptionSegments(
   }));
 }
 
+function isMomentRegenerationPrompt(text: string) {
+  const lower = text.toLowerCase();
+  return (
+    /\b(retry|rerun|re-run|regenerate|redo|refresh)\b/.test(lower) &&
+    /\b(moment|moments|beat|beats|cut|cuts)\b/.test(lower)
+  );
+}
+
+function timedOutAnalysisStatus(videoId: string): AnalysisStatus {
+  return {
+    videoId,
+    stage: "error",
+    message:
+      "The video AI is taking too long to finish. Try again, or use a shorter/lower-resolution clip.",
+    errorType: "timeout",
+    updatedAt: Date.now(),
+    done: true,
+  };
+}
+
 /**
  * Read a file's real duration off a throwaway <video>, so the timeline can lay
  * the take and its cuts out at true time. Resolves 0 (→ the caller falls back
@@ -202,6 +222,7 @@ export default function Editor() {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [regeneratingMoments, setRegeneratingMoments] = useState(false);
   const [stamp, setStamp] = useState("");
 
   // Clip editing: a one-slot clipboard for copy/cut/paste and a linear
@@ -507,9 +528,12 @@ export default function Editor() {
     };
   }, [mediaUrl, mediaDuration]);
 
-  const pushMind = useCallback((text: string) => {
+  const pushMind = useCallback((text: string, persist = true) => {
     setMessages((prev) => [...prev, mindMessage(text)]);
-  }, []);
+    if (!persist) return;
+    const targetId = video?.id || projectId || "notebook";
+    void api.saveEditorEvent(targetId, text).catch(() => {});
+  }, [projectId, video?.id]);
 
   /* ---- Take ---- */
 
@@ -749,6 +773,14 @@ export default function Editor() {
 
   /* ---- Cuts: editing ---- */
 
+  function handlePickClip(clipId: string) {
+    setSelectedClipId(clipId);
+    const clip = clips.find((item) => item.id === clipId);
+    if (clip) {
+      pushMind(`Selected cut "${clip.title}" at ${formatSpan(clip.start, clip.end)}.`);
+    }
+  }
+
   function handleClipChange(next: Clip) {
     setClips((prev) => prev.map((c) => (c.id === next.id ? next : c)));
   }
@@ -774,6 +806,7 @@ export default function Editor() {
       setClips((prev) =>
         prev.map((clip) => (clip.id === clipId ? updated : clip)),
       );
+      pushMind(`Removed ${hashtag} from "${updated.title}".`);
     } catch (err: any) {
       setClips(previous);
       pushMind(`Couldn't remove ${hashtag}: ${err.message || err}`);
@@ -1832,6 +1865,93 @@ export default function Editor() {
 
   /* ---- Mind ---- */
 
+  async function pollMomentAnalysis(videoId: string) {
+    let foundMoments: Moment[] = [];
+    let latestStatus: AnalysisStatus | null = null;
+    const startTime = Date.now();
+    const timeoutMs = 180_000;
+
+    while (Date.now() - startTime < timeoutMs) {
+      await sleep(1000);
+      const status = await api.getAnalysisStatus(videoId).catch(() => null);
+      if (status) {
+        latestStatus = status;
+        setAnalysisStatus(status);
+      }
+      foundMoments = await api.listMoments(videoId);
+      if (foundMoments && foundMoments.length > 0) break;
+      if (status?.done) break;
+    }
+
+    if (foundMoments.length === 0 && latestStatus && !latestStatus.done) {
+      latestStatus = timedOutAnalysisStatus(videoId);
+      setAnalysisStatus(latestStatus);
+    }
+
+    return { foundMoments, latestStatus };
+  }
+
+  async function regenerateMomentsFromChat(text: string) {
+    const targetId = video?.id || projectId || "notebook";
+    await api.saveEditorEvent(targetId, text, "you").catch(() => null);
+
+    if (!video?.id) {
+      pushMind("Upload a video first, then I can regenerate moments for it.");
+      return;
+    }
+
+    setTool("mind");
+    setBusy(true);
+    setRegeneratingMoments(true);
+    setMoments([]);
+    setAnalysisStatus({
+      videoId: video.id,
+      stage: "queued",
+      message: "Regenerating moments from the video.",
+      updatedAt: Date.now(),
+      done: false,
+    });
+
+    try {
+      const started = await api.retryAnalysis(video.id);
+      setAnalysisStatus(started);
+      const { foundMoments, latestStatus } = await pollMomentAnalysis(video.id);
+      setMoments(foundMoments);
+
+      if (foundMoments.length > 0) {
+        pushMind(
+          `Done. I regenerated ${foundMoments.length} moment${
+            foundMoments.length === 1 ? "" : "s"
+          } and replaced the old set.`,
+        );
+      } else {
+        const finalStatus =
+          latestStatus?.done
+            ? latestStatus
+            : await api.getAnalysisStatus(video.id).catch(() => null);
+        if (finalStatus) setAnalysisStatus(finalStatus);
+        pushMind(
+          finalStatus?.message ??
+            "I regenerated the video, but no strong standalone moments were found.",
+        );
+      }
+    } catch (err: any) {
+      const message = `Regeneration failed: ${err.message || err}`;
+      setAnalysisStatus({
+        videoId: video.id,
+        stage: "error",
+        message,
+        errorType: "network",
+        updatedAt: Date.now(),
+        done: true,
+      });
+      pushMind(message);
+    } finally {
+      setBusy(false);
+      setRegeneratingMoments(false);
+    }
+  }
+
   useEffect(() => {
     const targetId = video?.id || projectId || "notebook";
     api
@@ -1848,6 +1968,12 @@ export default function Editor() {
     setPrompt("");
     setMessages((prev) => [...prev, youMessage(text)]);
     const targetId = video?.id || projectId || "notebook";
+
+    if (isMomentRegenerationPrompt(text)) {
+      await regenerateMomentsFromChat(text);
+      return;
+    }
+
     setChatBusy(true);
 
     try {
@@ -2161,6 +2287,7 @@ export default function Editor() {
         clips={clips}
         messages={messages}
         chatBusy={chatBusy}
+        regeneratingMoments={regeneratingMoments}
         selectedClipId={selectedClipId}
         captionTracks={captionTracks}
         fontChoices={fontChoices}
@@ -2169,7 +2296,7 @@ export default function Editor() {
         onPrompt={setPrompt}
         onSend={handleSend}
         onReset={handleReset}
-        onPickClip={setSelectedClipId}
+        onPickClip={handlePickClip}
         onClipChange={handleClipChange}
         onRemoveHashtag={handleRemoveHashtag}
         onGenerateCaptions={handleGenerateCaptions}
@@ -2368,7 +2495,7 @@ export default function Editor() {
           trimPulse={trimPulse}
           onSeek={seek}
           onPickClip={(id) => {
-            setSelectedClipId(id);
+            handlePickClip(id);
             setTool("caption");
           }}
           onPickCaptionTrack={(id) => {
