@@ -14,10 +14,19 @@ from ..services import captions, ffmpeg, playbook
 
 router = APIRouter()
 
+DEMO_LABELS = {"Confession hook", "Talking-head tip", "Exam-panic rant"}
+LEGACY_FALLBACK_REASONS = {"Detected from the video's spoken transcript."}
+
 
 @router.get("/{video_id}", response_model=list[Moment])
 async def list_moments(video_id: str) -> list[Moment]:
-    return [Moment.model_validate(m) for m in storage.list_moments(video_id)]
+    real_rows = [
+        m
+        for m in storage.list_moments(video_id)
+        if m.get("label") not in DEMO_LABELS
+        and m.get("reason") not in LEGACY_FALLBACK_REASONS
+    ]
+    return [Moment.model_validate(m) for m in real_rows]
 
 
 @router.post("/{moment_id}/decide", response_model=Moment)

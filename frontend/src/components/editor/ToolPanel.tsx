@@ -1,8 +1,9 @@
 "use client";
 
-import { type ChangeEvent, type FormEvent } from "react";
-import { ArrowUp } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ArrowUp, Play, Square, X } from "lucide-react";
 import type {
+  AnalysisStatus,
   CaptionLanguage,
   CaptionTrack,
   Clip,
@@ -17,21 +18,25 @@ type ToolPanelProps = {
   tool: ToolId;
   video: Video | null;
   busy: boolean;
+  analysisStatus: AnalysisStatus | null;
   moments: Moment[];
   clips: Clip[];
   messages: Message[];
+  chatBusy: boolean;
   selectedClipId: string | null;
   captionTracks: CaptionTrack[];
+  fontChoices: string[];
+  mediaUrl: string | null;
   prompt: string;
   onPrompt: (value: string) => void;
   onSend: (text: string) => void;
   onReset: () => void;
   onPickClip: (id: string) => void;
   onClipChange: (clip: Clip) => void;
+  onRemoveHashtag: (clipId: string, hashtag: string) => void;
   onGenerateCaptions: (clipId: string, language: CaptionLanguage) => void;
   onCaptionTrackChange: (track: CaptionTrack) => void;
-  onCaptionFontFile: (trackId: string, file: File | null) => void;
-  onCaptionFontUrl: (trackId: string, url: string) => void;
+  onLoadInstalledFonts: () => void;
   onClipContext: (id: string, x: number, y: number) => void;
   onSeek: (seconds: number) => void;
   onRecut: (id: string) => void;
@@ -58,22 +63,78 @@ const CAPTION_LANGUAGES: { id: CaptionLanguage; label: string }[] = [
   { id: "hi", label: "Hindi" },
 ];
 
-const FONT_CHOICES = [
-  "Inter",
-  "Arial",
-  "Georgia",
-  "Impact",
-  "Montserrat",
-  "Poppins",
-  "Roboto",
-];
+function MomentPreview({
+  mediaUrl,
+  moment,
+  onSeek,
+}: {
+  mediaUrl: string | null;
+  moment: Moment;
+  onSeek: (seconds: number) => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (!active) {
+      el.pause();
+      return;
+    }
+    el.currentTime = moment.start;
+    el.muted = true;
+    void el.play().catch(() => setActive(false));
+  }, [active, moment.start]);
+
+  if (!mediaUrl) return null;
+
+  return (
+    <div className="cut__moment-preview">
+      <video
+        ref={videoRef}
+        src={mediaUrl}
+        muted
+        playsInline
+        preload="metadata"
+        onLoadedMetadata={(event) => {
+          event.currentTarget.currentTime = moment.start;
+        }}
+        onTimeUpdate={(event) => {
+          if (event.currentTarget.currentTime >= moment.end) {
+            event.currentTarget.pause();
+            event.currentTarget.currentTime = moment.start;
+            setActive(false);
+          }
+        }}
+        onClick={() => {
+          onSeek(moment.start);
+          setActive((value) => !value);
+        }}
+      />
+      <button
+        type="button"
+        className="cut__preview-toggle"
+        onClick={() => {
+          onSeek(moment.start);
+          setActive((value) => !value);
+        }}
+        aria-label={active ? "Stop moment preview" : "Preview moment"}
+        title={active ? "Stop preview" : "Preview this moment"}
+      >
+        {active ? <Square aria-hidden="true" /> : <Play aria-hidden="true" />}
+      </button>
+    </div>
+  );
+}
 
 export default function ToolPanel(props: ToolPanelProps) {
   const { tool, video, busy, clips, selectedClipId } = props;
 
   const selectedClip = clips.find((clip) => clip.id === selectedClipId) ?? null;
-  const selectedCaptionTrack =
-    selectedClip && props.captionTracks.find((track) => track.clipId === selectedClip.id);
+  const selectedCaptionTrack = selectedClip
+    ? props.captionTracks.find((track) => track.clipId === selectedClip.id)
+    : null;
 
   const pendingMoments = props.moments.filter((m) => m.status === "pending");
   const count =
@@ -119,12 +180,10 @@ export default function ToolPanel(props: ToolPanelProps) {
         {/* ---- Moments: standout beats proposed by Encore ---- */}
         {tool === "moments" ? (
           busy ? (
-            <p className="cut__hint">Watching the tape and proposing standalone moments…</p>
+            <p className="cut__hint">{props.analysisStatus?.message ?? "Preparing the video for analysis."}</p>
           ) : props.moments.length === 0 ? (
             <p className="cut__hint">
-              {video
-                ? "No moments detected yet. As transcription and detection finish, proposed beats will appear here."
-                : "Upload a long take first. Encore will find the beats that stand alone."}
+              {props.analysisStatus?.stage === "error" ? props.analysisStatus.message : props.analysisStatus?.message && video ? props.analysisStatus.message : video ? "No moments detected yet. Analysis updates will appear here as the video is processed." : "Upload a long take first. Encore will find the beats that stand alone."}
             </p>
           ) : (
             <>
@@ -174,6 +233,11 @@ export default function ToolPanel(props: ToolPanelProps) {
                     {moment.label}
                   </button>
                   <p className="cut__row-note">{moment.reason}</p>
+                  <MomentPreview
+                    mediaUrl={props.mediaUrl}
+                    moment={moment}
+                    onSeek={props.onSeek}
+                  />
                   <div className="cut__row-actions">
                     {moment.status === "pending" ? (
                       <>
@@ -298,11 +362,11 @@ export default function ToolPanel(props: ToolPanelProps) {
           )
         ) : null}
 
-        {/* ---- Caption: the selected cut's title, caption, hashtags ---- */}
+        {/* ---- Captions: post copy plus on-video timed text layers ---- */}
         {tool === "caption" ? (
           !selectedClip ? (
             <p className="cut__hint">
-              Pick a cut on the timeline and its title and caption open here.
+              Pick a cut on the timeline and its captions open here.
             </p>
           ) : (
             <>
@@ -321,7 +385,7 @@ export default function ToolPanel(props: ToolPanelProps) {
                 />
               </div>
               <div className="cut__field">
-                <label htmlFor={`cut-caption-${selectedClip.id}`}>Caption</label>
+                <label htmlFor={`cut-caption-${selectedClip.id}`}>Post caption</label>
                 <textarea
                   id={`cut-caption-${selectedClip.id}`}
                   rows={5}
@@ -339,11 +403,121 @@ export default function ToolPanel(props: ToolPanelProps) {
                 style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}
               >
                 {selectedClip.hashtags.map((tag) => (
-                  <span key={tag} className="cut__tag">
+                  <span key={tag} className="cut__tag cut__tag--removable">
                     {tag}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${tag}`}
+                      title={`Remove ${tag}`}
+                      disabled={selectedClip.posted}
+                      onClick={() => props.onRemoveHashtag(selectedClip.id, tag)}
+                    >
+                      <X aria-hidden="true" />
+                    </button>
                   </span>
                 ))}
               </div>
+              <div className="cut__caption-tools">
+                <div className="cut__field">
+                  <label htmlFor={`caption-language-${selectedClip.id}`}>
+                    Subtitle language
+                  </label>
+                  <select
+                    id={`caption-language-${selectedClip.id}`}
+                    value={selectedCaptionTrack?.language ?? "en"}
+                    disabled={selectedClip.posted}
+                    onChange={(event) =>
+                      props.onGenerateCaptions(
+                        selectedClip.id,
+                        event.target.value as CaptionLanguage,
+                      )
+                    }
+                  >
+                    {CAPTION_LANGUAGES.map((language) => (
+                      <option key={language.id} value={language.id}>
+                        {language.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  className="cut__mini cut__mini--keep"
+                  disabled={selectedClip.posted}
+                  onClick={() =>
+                    props.onGenerateCaptions(
+                      selectedClip.id,
+                      selectedCaptionTrack?.language ?? "en",
+                    )
+                  }
+                >
+                  Generate caption layer
+                </button>
+              </div>
+
+              {selectedCaptionTrack ? (
+                <div className="cut__caption-editor">
+                  <div className="cut__field">
+                    <label htmlFor={`caption-font-${selectedCaptionTrack.id}`}>
+                      Font
+                    </label>
+                    <select
+                      id={`caption-font-${selectedCaptionTrack.id}`}
+                      value={selectedCaptionTrack.fontFamily}
+                      disabled={selectedClip.posted}
+                      onChange={(event) =>
+                        props.onCaptionTrackChange({
+                          ...selectedCaptionTrack,
+                          fontFamily: event.target.value,
+                          fontSource: "system",
+                        })
+                      }
+                      onFocus={props.onLoadInstalledFonts}
+                    >
+                      {props.fontChoices.map((font) => (
+                        <option key={font} value={font}>
+                          {font}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="cut__mini"
+                    disabled={selectedClip.posted}
+                    onClick={props.onLoadInstalledFonts}
+                  >
+                    Refresh installed fonts
+                  </button>
+
+                  <div className="cut__caption-lines">
+                    {selectedCaptionTrack.segments.map((segment, index) => (
+                      <label key={segment.id} className="cut__caption-line">
+                        <span>
+                          {formatTime(segment.start)} - {formatTime(segment.end)}
+                        </span>
+                        <textarea
+                          rows={2}
+                          value={segment.text}
+                          disabled={selectedClip.posted}
+                          onFocus={() => props.onSeek(segment.start)}
+                          onChange={(event) =>
+                            props.onCaptionTrackChange({
+                              ...selectedCaptionTrack,
+                              segments: selectedCaptionTrack.segments.map((item, i) =>
+                                i === index
+                                  ? { ...item, text: event.target.value }
+                                  : item,
+                              ),
+                            })
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {selectedClip.posted ? (
                 <p className="cut__hint">
                   This cut is live — recut it to change the hook.
@@ -366,6 +540,11 @@ export default function ToolPanel(props: ToolPanelProps) {
                   {message.text}
                 </p>
               ))}
+              {props.chatBusy ? (
+                <p className="cut__thinking" aria-live="polite">
+                  Thinking...
+                </p>
+              ) : null}
             </div>
             <form
               className="cut__ask"
@@ -391,3 +570,4 @@ export default function ToolPanel(props: ToolPanelProps) {
     </section>
   );
 }
+

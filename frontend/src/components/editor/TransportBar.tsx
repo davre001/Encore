@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Captions,
   FastForward,
   Maximize,
   Minimize,
@@ -29,6 +30,7 @@ export type TransportEdit =
   | "redo"
   | "delete"
   | "cut"
+  | "captions"
   | "trim-left"
   | "trim-right";
 
@@ -99,6 +101,7 @@ export default function TransportBar({
         <span className="cut__tool-divider" aria-hidden="true" />
         <IconBtn label="Delete take" Icon={Trash2} onClick={() => onEdit("delete")} disabled={!canEdit} />
         <IconBtn label="Cut at playhead" Icon={Scissors} onClick={() => onEdit("cut")} disabled={!canEdit} />
+        <IconBtn label="Generate captions" Icon={Captions} onClick={() => onEdit("captions")} disabled={!canEdit} />
         <IconBtn label="Trim left side to playhead" Icon={StepBack} onClick={() => onEdit("trim-left")} disabled={!canEdit} />
         <IconBtn label="Trim right side from playhead" Icon={StepForward} onClick={() => onEdit("trim-right")} disabled={!canEdit} />
       </div>

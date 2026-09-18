@@ -15,6 +15,19 @@ Decision = Literal["accept", "reject"]
 MomentStatus = Literal["pending", "accepted", "rejected"]
 Verdict = Literal["hit", "mid", "flop"]
 Role = Literal["mind", "you"]
+CaptionLanguage = Literal["en", "fr", "es", "pt", "de", "it", "ar", "hi"]
+AnalysisStage = Literal[
+    "queued",
+    "uploaded",
+    "thinking",
+    "transcribing",
+    "watching",
+    "generating",
+    "complete",
+    "empty",
+    "error",
+]
+AnalysisErrorType = Literal["network", "timeout", "quota", "api", "unknown"]
 
 
 class CamelModel(BaseModel):
@@ -40,6 +53,15 @@ class Moment(CamelModel):
     label: str
     reason: str
     status: MomentStatus = "pending"
+
+
+class AnalysisStatus(CamelModel):
+    video_id: str
+    stage: AnalysisStage
+    message: str
+    updated_at: int
+    error_type: Optional[AnalysisErrorType] = None
+    done: bool = False
 
 
 class Clip(CamelModel):
@@ -119,6 +141,33 @@ class ClipUpdate(CamelModel):
     end: Optional[float] = None
 
 
+class CaptionSegment(CamelModel):
+    id: str
+    start: float
+    end: float
+    text: str
+
+
+class CaptionTrack(CamelModel):
+    id: str
+    clip_id: str
+    language: CaptionLanguage
+    font_family: str = "Inter"
+    font_source: Optional[str] = "system"
+    font_url: Optional[str] = None
+    segments: list[CaptionSegment]
+
+
+class CaptionGenerateRequest(CamelModel):
+    clip_id: str
+    video_id: Optional[str] = None
+    title: str
+    caption: str
+    start: float
+    end: float
+    language: CaptionLanguage = "en"
+
+
 # --- Small response envelopes ----------------------------------------------
 class PublishResult(CamelModel):
     post_id: str
@@ -192,6 +241,7 @@ class ProjectEffects(CamelModel):
     ai_on: bool = False
     ai_permission_mode: Literal["auto", "ask"] = "ask"
     compare_on: bool = False
+    caption_tracks: list[dict] = []
 
 
 class ProjectCreate(CamelModel):
@@ -307,4 +357,3 @@ class AnalyticsDataResponse(CamelModel):
     posts: list[AnalyticsPostItem] = []
     summary: AnalyticsSummary = AnalyticsSummary()
     playbook: list[PlaybookRow] = []
-

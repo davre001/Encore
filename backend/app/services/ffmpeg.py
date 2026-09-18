@@ -71,3 +71,46 @@ def render_clip(src_path: str, start: float, end: float) -> str:
         except (OSError, subprocess.SubprocessError):
             continue
     return src_path
+
+
+def analysis_proxy(src_path: str) -> str:
+    """Create a small video copy for AI review; return source on failure."""
+    if not src_path or not os.path.exists(src_path) or not _has("ffmpeg"):
+        return src_path
+    try:
+        if os.path.getsize(src_path) <= 45 * 1024 * 1024:
+            return src_path
+    except OSError:
+        return src_path
+
+    out_path = os.path.join(UPLOAD_DIR, f"analysis_{uuid.uuid4().hex[:8]}.mp4")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        src_path,
+        "-vf",
+        "scale=-2:640",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "31",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "64k",
+        "-ac",
+        "1",
+        "-movflags",
+        "+faststart",
+        out_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=900)
+        if result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return out_path
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return src_path

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..dependencies import get_user_id
 from ..models.schemas import MindMemoryCreate, MindMemoryResponse, ChatPromptRequest, Message
-from ..services import minds, minds_api
+from ..services import gemini, minds, minds_api
 from ..config import capabilities
 
 router = APIRouter()
@@ -74,12 +74,23 @@ async def chat_with_mind(
     minds.save_chat_message(
         role="you", text=body.text, video_id=body.video_id, user_id=user_id
     )
-    reply_text = minds.chat_reply(
-        text=body.text,
-        context=body.context or "",
-        video_id=body.video_id,
-        user_id=user_id,
-    )
+    memories = minds.get_persistent_memories(user_id)
+    history = minds.get_chat_history(video_id=body.video_id, user_id=user_id)
+    reply_text = None
+    if gemini.available():
+        reply_text = gemini.chat_reply(
+            text=body.text,
+            context=body.context or "",
+            memories=memories,
+            history=history,
+        )
+    if not reply_text:
+        reply_text = minds.chat_reply(
+            text=body.text,
+            context=body.context or "",
+            video_id=body.video_id,
+            user_id=user_id,
+        )
     saved_reply = minds.save_chat_message(
         role="mind", text=reply_text, video_id=body.video_id, user_id=user_id
     )

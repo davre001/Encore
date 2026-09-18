@@ -1,20 +1,17 @@
-"""Messages — notebook chat with the Mind, per-user isolated."""
+"""Messages - notebook chat, per-user isolated."""
 
 import logging
-import time
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends
 
+from .. import storage
 from ..dependencies import get_user_id
 from ..models.schemas import Message, MessageCreate
-from .. import storage
-from ..services import analytics, minds, youtube
+from ..services import analytics, gemini, minds, youtube
 
 router = APIRouter()
 log = logging.getLogger("encore.messages")
-
-THINKING_TEXT = "On it — reading the take and thinking this through…"
 
 
 @router.get("/{video_id}", response_model=list[Message])
@@ -27,17 +24,18 @@ async def list_messages(
     if not history:
         history = storage.list_messages(video_id)
         if user_id:
-            history = [m for m in history if m.get("userId") == user_id or not m.get("userId")]
+            history = [
+                m for m in history if m.get("userId") == user_id or not m.get("userId")
+            ]
     return [Message.model_validate(m) for m in history]
 
 
 @router.post("", response_model=Message)
 async def send_message(
     body: MessageCreate,
-    background: BackgroundTasks,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Message:
-    """Send a message to the Mind and return its memory-informed response."""
+    """Send a message and return the AI response with memory-informed context."""
     user_msg = minds.save_chat_message(
         role="you",
         text=body.text,
@@ -53,47 +51,38 @@ async def send_message(
         else ""
     )
 
-    if minds.available():
-        background.add_task(
-            _answer_in_background, body.video_id, body.text, context, user_id
+    memories = minds.get_persistent_memories(user_id)
+    history = minds.get_chat_history(video_id=body.video_id, user_id=user_id)
+    reply_text: Optional[str] = None
+
+    if gemini.available():
+        reply_text = gemini.chat_reply(
+            text=body.text,
+            context=context,
+            memories=memories,
+            history=history,
         )
-        return Message(
-            id=f"pending_{user_msg['id']}",
-            role="mind",
-            text=THINKING_TEXT,
-            created_at=int(time.time() * 1000),
-            pending=True,
-        )
 
-    reply_text = minds.chat_reply(
-        text=body.text,
-        context=context,
-        video_id=body.video_id,
-        user_id=user_id,
-    )
-    return Message.model_validate(
-        _save_reply(reply_text, body.video_id, user_id)
-    )
+    if not reply_text:
+        if gemini.available():
+            err = gemini.last_error()
+            reply_text = (
+                err.get("message")
+                if err
+                else "The AI service could not answer that. Try again in a moment."
+            )
+        else:
+            reply_text = minds.chat_reply(
+                text=body.text,
+                context=context,
+                video_id=body.video_id,
+                user_id=user_id,
+            )
 
-
-def _answer_in_background(
-    video_id: str, text: str, context: str, user_id: Optional[str]
-) -> None:
-    try:
-        reply_text = minds.chat_reply(
-            text=text, context=context, video_id=video_id, user_id=user_id
-        )
-    except Exception as exc:
-        log.warning("Mind reply failed for %s: %s", video_id, exc)
-        reply_text = (
-            "I lost the thread on that one — the Mind did not come back. Ask again?"
-        )
-    _save_reply(reply_text, video_id, user_id)
+    return Message.model_validate(_save_reply(reply_text, body.video_id, user_id))
 
 
-def _save_reply(
-    text: str, video_id: str, user_id: Optional[str]
-) -> dict:
+def _save_reply(text: str, video_id: str, user_id: Optional[str]) -> dict:
     mind_msg = minds.save_chat_message(
         role="mind", text=text, video_id=video_id, user_id=user_id
     )

@@ -22,6 +22,7 @@ from .db import init_db
 from .routes import (
     analytics,
     auth,
+    captions,
     clips,
     messages,
     mind,
@@ -79,6 +80,7 @@ async def health() -> dict:
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(videos.router, prefix="/api/videos", tags=["videos"])
 app.include_router(moments.router, prefix="/api/moments", tags=["moments"])
+app.include_router(captions.router, prefix="/api/captions", tags=["captions"])
 app.include_router(clips.router, prefix="/api/clips", tags=["clips"])
 app.include_router(posts.router, prefix="/api/posts", tags=["posts"])
 app.include_router(messages.router, prefix="/api/messages", tags=["messages"])

@@ -1,43 +1,13 @@
-"""Moment detection — where the standalone beats are.
+"""Real moment detection from a video's transcript.
 
-Three tiers, best first, each falling through to the next so there is always an
-answer:
-  1. Minds proposes beats from the transcript (real AI).
-  2. A transcript keyword scan times the known beats to real speech.
-  3. Positional beats as fractions of the take, so a video with no usable
-     transcript still comes back with somewhere to start cutting.
-
-Every `reason` below describes the shape of the beat itself. None of them claim
-anything about the creator's track record — a first upload has no history to
-cite, and inventing one would be a lie the UI repeats verbatim.
+Encore should not show demo beats as if they came from the user's video. This
+module only returns moments grounded in transcribed speech or an AI proposal
+made from that transcript. If there is no meaningful speech, it returns [].
 """
 
 from ..config import FALLBACK_DURATION
 from .. import storage
-from . import minds
-
-# Three beats as fractions of the take: the deterministic floor when there is no
-# transcript to work from. Labels and keywords are the detection vocabulary.
-BEATS: list[dict] = [
-    {
-        "at": (0.1, 0.24),
-        "label": "Confession hook",
-        "reason": "Opens on an admission, so it needs no setup to make sense alone.",
-        "keywords": ("fail", "confess", "honest", "truth", "admit"),
-    },
-    {
-        "at": (0.34, 0.5),
-        "label": "Talking-head tip",
-        "reason": "One point straight to camera — self-contained if the tip lands early.",
-        "keywords": ("tip", "three things", "learned", "how i", "advice"),
-    },
-    {
-        "at": (0.7, 0.84),
-        "label": "Exam-panic rant",
-        "reason": "Sustained energy across one unbroken stretch of the take.",
-        "keywords": ("panic", "spiral", "2 a.m.", "2am", "exam", "stress", "rant"),
-    },
-]
+from . import gemini, minds
 
 
 def _span(duration: float) -> float:
@@ -45,9 +15,6 @@ def _span(duration: float) -> float:
 
 
 def _round1(value: float) -> float:
-    # JS Math.round semantics (round half up), not Python's round-half-to-even,
-    # so positional beats match the frontend's buildMoments for any duration.
-    # All inputs here are non-negative, so int(x + 0.5) == floor(x + 0.5).
     return int(value * 10 + 0.5) / 10
 
 
@@ -55,73 +22,87 @@ def _moment(video_id: str, start: float, end: float, label: str, reason: str) ->
     return {
         "id": storage.new_id("mom"),
         "videoId": video_id,
-        "start": start,
-        "end": end,
+        "start": _round1(start),
+        "end": _round1(end),
         "label": label,
         "reason": reason,
         "status": "pending",
     }
 
 
-def _from_beats(video_id: str, span: float) -> list[dict]:
-    """Positional fallback — mirrors buildMoments() exactly."""
+def _from_transcript_chunks(video_id: str, transcript: list[dict], span: float) -> list[dict]:
+    """Neutral fallback: group actual speech into usable chunks."""
+    chunks: list[dict] = []
+    current: list[dict] = []
+    for seg in transcript:
+        text = str(seg.get("text", "")).strip()
+        if not text:
+            continue
+        try:
+            start = float(seg.get("start", 0))
+            end = float(seg.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if not current:
+            current = [{"start": start, "end": end, "text": text}]
+            continue
+        cur_start = float(current[0]["start"])
+        cur_end = float(current[-1]["end"])
+        if end - cur_start <= 24 and start - cur_end <= 2.5:
+            current.append({"start": start, "end": end, "text": text})
+        else:
+            chunks.append({"start": cur_start, "end": cur_end, "rows": current})
+            current = [{"start": start, "end": end, "text": text}]
+    if current:
+        chunks.append({"start": current[0]["start"], "end": current[-1]["end"], "rows": current})
+
     out: list[dict] = []
-    for beat in BEATS:
-        start = _round1(beat["at"][0] * span)
-        end = _round1(beat["at"][1] * span)
-        if end > start + 0.4 and end <= span:
-            out.append(_moment(video_id, start, end, beat["label"], beat["reason"]))
+    for index, chunk in enumerate(chunks[:5], start=1):
+        start = max(0.0, float(chunk["start"]))
+        end = min(span, float(chunk["end"]))
+        if end <= start + 0.4:
+            continue
+        first_text = str(chunk["rows"][0].get("text", "")).strip()
+        label = first_text[:42].rstrip(" .,") or f"Speech moment {index}"
+        out.append(
+            _moment(
+                video_id,
+                start,
+                end,
+                label,
+                "Detected from the video's spoken transcript.",
+            )
+        )
     return out
 
 
-def _from_transcript(video_id: str, transcript: list[dict], span: float) -> list[dict]:
-    """Time the known beats to real speech; [] if nothing matches (→ fallback)."""
-    out: list[dict] = []
-    matched = False
-    for beat in BEATS:
-        hit = None
-        for seg in transcript:
-            text = str(seg.get("text", "")).lower()
-            if any(kw in text for kw in beat["keywords"]):
-                hit = seg
-                break
-        if hit is not None:
-            start = max(0.0, _round1(float(hit["start"])))
-            end = min(span, _round1(float(hit["end"])))
-            if end <= start + 0.4:
-                end = min(span, start + 15.0)  # pad a too-short match
-            if end > start + 0.4:
-                out.append(_moment(video_id, start, end, beat["label"], beat["reason"]))
-                matched = True
-                continue
-        # No keyword hit for this beat — keep its positional slot.
-        start = _round1(beat["at"][0] * span)
-        end = _round1(beat["at"][1] * span)
-        if end > start + 0.4 and end <= span:
-            out.append(_moment(video_id, start, end, beat["label"], beat["reason"]))
-    return out if matched else []
-
-
-def find_moments(video_id: str, duration: float, transcript: list[dict]) -> list[dict]:
-    """Propose pending moments for a video. Always returns at least the beats."""
+def find_moments(
+    video_id: str,
+    duration: float,
+    transcript: list[dict],
+    src_path: str | None = None,
+) -> list[dict]:
     span = _span(duration)
+    proposed = None
 
-    # 1. Non-verbal or empty audio: immediately use positional beats without polling or prompt
+    if src_path and gemini.available():
+        proposed = gemini.propose_video_moments(src_path, transcript, span)
+    if proposed:
+        return [
+            _moment(video_id, item["start"], item["end"], item["label"], item["reason"])
+            for item in proposed
+        ]
+
     if not transcript or not minds.is_meaningful_speech(transcript):
-        return _from_beats(video_id, span)
+        return []
 
-    # 2. Real dialogue: attempt AI proposal first
-    if minds.available():
+    proposed = gemini.propose_moments(transcript, span)
+    if not proposed and minds.available():
         proposed = minds.propose_moments(transcript, span)
-        if proposed:
-            return [
-                _moment(video_id, p["start"], p["end"], p["label"], p["reason"])
-                for p in proposed
-            ]
+    if proposed:
+        return [
+            _moment(video_id, item["start"], item["end"], item["label"], item["reason"])
+            for item in proposed
+        ]
 
-    # 3. Speech keyword alignment
-    from_tx = _from_transcript(video_id, transcript, span)
-    if from_tx:
-        return from_tx
-
-    return _from_beats(video_id, span)
+    return []

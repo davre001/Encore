@@ -22,7 +22,17 @@ import TransportBar, {
 import ClipContextMenu, {
   type ClipMenuAction,
 } from "@/components/editor/ClipContextMenu";
-import type { Clip, Message, Moment, PostCheck, TakeSegment, Video } from "@/types";
+import type {
+  AnalysisStatus,
+  CaptionLanguage,
+  CaptionTrack,
+  Clip,
+  Message,
+  Moment,
+  PostCheck,
+  TakeSegment,
+  Video,
+} from "@/types";
 import { WORKFLOW_STEPS, workflowIndex } from "@/lib/studioAssets";
 import * as api from "@/api/client";
 import { extractFrames, extractPeaks, type Frame } from "@/lib/mediaGraphics";
@@ -67,35 +77,6 @@ function fileSlug(text: string) {
   );
 }
 
-// Hooks the caption regenerate / re-run-analysis actions rotate through, so
-// those menu items visibly do something in the mock pipeline.
-const CAPTION_VARIANTS: {
-  title: string;
-  caption: string;
-  hashtags: string[];
-}[] = [
-  {
-    title: "The part nobody films.",
-    caption: "The part nobody films.\n\nRaw, uncut, real.",
-    hashtags: ["#bts", "#raw", "#encore", "#shorts"],
-  },
-  {
-    title: "Watch till the end.",
-    caption: "Watch till the end — it flips.",
-    hashtags: ["#watchtillend", "#plottwist", "#encore", "#fyp"],
-  },
-  {
-    title: "I almost cut this.",
-    caption: "I almost cut this. Glad I didn’t.",
-    hashtags: ["#storytime", "#keep", "#encore", "#shorts"],
-  },
-  {
-    title: "This is the one.",
-    caption: "This is the one. Save it for later.",
-    hashtags: ["#save", "#thisone", "#encore", "#fyp"],
-  },
-];
-
 const ASPECTS: { id: string; label: string; ratio: string; n: number }[] = [
   { id: "16:9", label: "16:9", ratio: "16 / 9", n: 16 / 9 },
   { id: "9:16", label: "9:16", ratio: "9 / 16", n: 9 / 16 },
@@ -104,6 +85,17 @@ const ASPECTS: { id: string; label: string; ratio: string; n: number }[] = [
   { id: "4:5", label: "4:5", ratio: "4 / 5", n: 4 / 5 },
   { id: "21:9", label: "21:9", ratio: "21 / 9", n: 21 / 9 },
 ];
+
+const CAPTION_LANGUAGE_LABELS: Record<CaptionLanguage, string> = {
+  en: "English",
+  fr: "French",
+  es: "Spanish",
+  pt: "Portuguese",
+  de: "German",
+  it: "Italian",
+  ar: "Arabic",
+  hi: "Hindi",
+};
 
 function stem(name: string) {
   return name.replace(/\.[^/.]+$/, "") || name;
@@ -120,6 +112,35 @@ function initialProjectName() {
   return new URLSearchParams(window.location.search).get("project")
     ? "Opening…"
     : "Untitled";
+}
+
+function captionWords(text: string): string[] {
+  return text
+    .replace(/#[\w-]+/g, "")
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function buildCaptionSegments(
+  clip: Clip,
+  language: CaptionLanguage,
+): CaptionTrack["segments"] {
+  const words = captionWords(clip.caption || clip.title || "Caption");
+  const chunkSize = 4;
+  const chunks: string[] = [];
+  for (let i = 0; i < words.length; i += chunkSize) {
+    chunks.push(words.slice(i, i + chunkSize).join(" "));
+  }
+  const lines = chunks.length > 0 ? chunks : [clip.title || "Caption"];
+  const span = Math.max(clip.end - clip.start, 0.5);
+  const step = span / lines.length;
+  return lines.map((text, index) => ({
+    id: uid("capseg"),
+    start: clip.start + step * index,
+    end: index === lines.length - 1 ? clip.end : clip.start + step * (index + 1),
+    text: language === "en" ? text : `[${CAPTION_LANGUAGE_LABELS[language]}] ${text}`,
+  }));
 }
 
 /**
@@ -162,6 +183,7 @@ type MenuState = {
 export default function Editor() {
   const [video, setVideo] = useState<Video | null>(null);
   const [busy, setBusy] = useState(false);
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus | null>(null);
   const [moments, setMoments] = useState<Moment[]>([]);
   const [clips, setClips] = useState<Clip[]>([]);
   // Ids the backend knows about (from decide→listClips, or created at publish).
@@ -179,6 +201,7 @@ export default function Editor() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
   const [stamp, setStamp] = useState("");
 
   // Clip editing: a one-slot clipboard for copy/cut/paste and a linear
@@ -197,6 +220,17 @@ export default function Editor() {
   const [takeIn, setTakeIn] = useState(0);
   const [takeOut, setTakeOut] = useState(0);
   const [trimPulse, setTrimPulse] = useState(false);
+  const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
+  const [selectedCaptionTrackId, setSelectedCaptionTrackId] = useState<string | null>(null);
+  const [fontChoices, setFontChoices] = useState<string[]>([
+    "Inter",
+    "Arial",
+    "Georgia",
+    "Impact",
+    "Montserrat",
+    "Poppins",
+    "Roboto",
+  ]);
 
   // View toggles that live on the transport bar.
   const [aiOn, setAiOn] = useState(false);
@@ -282,6 +316,10 @@ export default function Editor() {
             setAiPermissionMode(proj.effects.aiPermissionMode);
           }
           if (proj.effects.compareOn !== undefined) setCompareOn(proj.effects.compareOn);
+          if (proj.effects.captionTracks) {
+            setCaptionTracks(proj.effects.captionTracks);
+            setSelectedCaptionTrackId(proj.effects.captionTracks[0]?.id ?? null);
+          }
         }
         // Restore posted/verdict state so a resumed posted project stays posted.
         if (proj.status) setProjectStatus(proj.status);
@@ -311,6 +349,15 @@ export default function Editor() {
             .listMoments(proj.videoId)
             .then((found) => {
               if (mounted && found) setMoments(found);
+            })
+            .catch(() => {});
+          api
+            .listClips(proj.videoId)
+            .then((found) => {
+              if (!mounted || !found) return;
+              setClips(found);
+              serverClipIds.current = new Set(found.map((clip) => clip.id));
+              setSelectedClipId(found[0]?.id ?? null);
             })
             .catch(() => {});
         }
@@ -366,6 +413,7 @@ export default function Editor() {
             aiOn,
             aiPermissionMode,
             compareOn,
+            captionTracks,
           },
         };
 
@@ -400,6 +448,7 @@ export default function Editor() {
     aiOn,
     aiPermissionMode,
     compareOn,
+    captionTracks,
     video,
     mediaUrl,
     projectStatus,
@@ -466,6 +515,13 @@ export default function Editor() {
 
   async function handleUpload(file: File) {
     setBusy(true);
+    setAnalysisStatus({
+      videoId: "pending",
+      stage: "queued",
+      message: "Preparing upload.",
+      updatedAt: Date.now(),
+      done: false,
+    });
     setMoments([]);
     setClips([]);
     serverClipIds.current.clear();
@@ -477,6 +533,8 @@ export default function Editor() {
     setFuture([]);
     setTakePast([]);
     setTakeFuture([]);
+    setCaptionTracks([]);
+    setSelectedCaptionTrackId(null);
     setPreviewRotate(0);
     setPreviewFlip(false);
     setTime(0);
@@ -528,6 +586,13 @@ export default function Editor() {
       // 1. Upload to backend
       const nextVideo = await api.uploadVideo(file);
       setVideo(nextVideo);
+      setAnalysisStatus({
+        videoId: nextVideo.id,
+        stage: "uploaded",
+        message: "Upload complete. Preparing analysis.",
+        updatedAt: Date.now(),
+        done: false,
+      });
       if (nextVideo.duration > 0) {
         setTakeOut(nextVideo.duration);
       }
@@ -536,14 +601,35 @@ export default function Editor() {
       // Real Whisper on a genuinely long take can run well past a minute, so
       // give it room before declaring the tape momentless.
       let foundMoments: Moment[] = [];
+      let latestStatus: AnalysisStatus | null = null;
       const startTime = Date.now();
       const timeoutMs = 180_000;
       while (Date.now() - startTime < timeoutMs) {
         await sleep(1000);
+        const status = await api.getAnalysisStatus(nextVideo.id).catch(() => null);
+        if (status) {
+          latestStatus = status;
+          setAnalysisStatus(status);
+        }
         foundMoments = await api.listMoments(nextVideo.id);
         if (foundMoments && foundMoments.length > 0) {
           break;
         }
+        if (status?.done) {
+          break;
+        }
+      }
+      if (foundMoments.length === 0 && latestStatus && !latestStatus.done) {
+        latestStatus = {
+          ...latestStatus,
+          stage: "error",
+          message:
+            "The video AI is taking too long to finish. Try again, or use a shorter/lower-resolution clip.",
+          errorType: "timeout",
+          updatedAt: Date.now(),
+          done: true,
+        };
+        setAnalysisStatus(latestStatus);
       }
 
       setMoments(foundMoments);
@@ -554,12 +640,26 @@ export default function Editor() {
           `Found ${foundMoments.length} standout moments. Review each beat: click Keep to turn it into a clip, or Skip.`,
         );
       } else {
+        const finalStatus =
+          latestStatus?.done
+            ? latestStatus
+            : await api.getAnalysisStatus(nextVideo.id).catch(() => null);
+        if (finalStatus) setAnalysisStatus(finalStatus);
         pushMind(
-          "Processed the tape, but no standout moments surfaced yet. Longer takes can take a minute — you can also cut clips manually from the take.",
+          finalStatus?.message ??
+            "Processed the tape, but no standout moments surfaced. You can also cut clips manually from the take.",
         );
       }
     } catch (err: any) {
       setBusy(false);
+      setAnalysisStatus({
+        videoId: video?.id ?? "unknown",
+        stage: "error",
+        message: `Upload failed: ${err.message || err}`,
+        errorType: "network",
+        updatedAt: Date.now(),
+        done: true,
+      });
       pushMind(`Upload failed: ${err.message || err}`);
     }
   }
@@ -594,6 +694,7 @@ export default function Editor() {
 
   function handleReset() {
     setVideo(null);
+    setAnalysisStatus(null);
     setMoments([]);
     setClips([]);
     serverClipIds.current.clear();
@@ -607,6 +708,8 @@ export default function Editor() {
     setPreviewRotate(0);
     setPreviewFlip(false);
     setAiPermissionMode("ask");
+    setCaptionTracks([]);
+    setSelectedCaptionTrackId(null);
     setMediaUrl(null);
     setMediaDuration(0);
     setTakeSegments([]);
@@ -648,6 +751,151 @@ export default function Editor() {
 
   function handleClipChange(next: Clip) {
     setClips((prev) => prev.map((c) => (c.id === next.id ? next : c)));
+  }
+
+  async function handleRemoveHashtag(clipId: string, hashtag: string) {
+    const previous = clips;
+    const localNext = clips.map((clip) =>
+      clip.id === clipId
+        ? {
+            ...clip,
+            hashtags: clip.hashtags.filter((tag) => tag !== hashtag),
+          }
+        : clip,
+    );
+    setClips(localNext);
+
+    if (!serverClipIds.current.has(clipId)) {
+      return;
+    }
+
+    try {
+      const updated = await api.removeClipHashtag(clipId, hashtag);
+      setClips((prev) =>
+        prev.map((clip) => (clip.id === clipId ? updated : clip)),
+      );
+    } catch (err: any) {
+      setClips(previous);
+      pushMind(`Couldn't remove ${hashtag}: ${err.message || err}`);
+    }
+  }
+
+  async function generateCaptionTrackForRange(input: {
+    clipId: string;
+    title: string;
+    caption: string;
+    start: number;
+    end: number;
+    language: CaptionLanguage;
+  }) {
+    const existing = captionTracks.find((track) => track.clipId === input.clipId);
+    let nextTrack: CaptionTrack;
+    try {
+      const generated = await api.generateCaptionTrack({
+        ...input,
+        videoId: video?.id,
+      });
+      nextTrack = {
+        ...generated,
+        id: existing?.id ?? generated.id,
+        fontFamily: existing?.fontFamily ?? generated.fontFamily,
+        fontSource: existing?.fontSource ?? generated.fontSource,
+      };
+    } catch {
+      const fallbackClip: Clip = {
+        id: input.clipId,
+        momentId: input.clipId,
+        videoId: video?.id ?? "take",
+        title: input.title,
+        caption: input.caption,
+        hashtags: [],
+        tags: [],
+        start: input.start,
+        end: input.end,
+        posted: false,
+      };
+      nextTrack = {
+        id: existing?.id ?? uid("captrack"),
+        clipId: input.clipId,
+        language: input.language,
+        fontFamily: existing?.fontFamily ?? "Inter",
+        fontSource: existing?.fontSource ?? "system",
+        segments: buildCaptionSegments(fallbackClip, input.language),
+      };
+    }
+    setCaptionTracks((prev) => [
+      nextTrack,
+      ...prev.filter((track) => track.clipId !== input.clipId),
+    ]);
+    setSelectedCaptionTrackId(nextTrack.id);
+    setTool("caption");
+    pushMind(
+      `Added ${CAPTION_LANGUAGE_LABELS[input.language]} captions as timed text layers.`,
+    );
+  }
+
+  async function handleGenerateCaptions(clipId: string, language: CaptionLanguage) {
+    const clip = clips.find((item) => item.id === clipId);
+    if (!clip) return;
+    await generateCaptionTrackForRange({
+      clipId,
+      title: clip.title,
+      caption: clip.caption,
+      start: clip.start,
+      end: clip.end,
+      language,
+    });
+    setSelectedClipId(clipId);
+  }
+
+  async function generateCaptionsFromTransport() {
+    const clip = selectedClipId ? clips.find((item) => item.id === selectedClipId) : null;
+    if (clip) {
+      await handleGenerateCaptions(clip.id, "en");
+      return;
+    }
+    if (!video && !mediaUrl) return;
+    await generateCaptionTrackForRange({
+      clipId: "take_captions",
+      title: projectName || "Main take",
+      caption: projectName || "Main take",
+      start: 0,
+      end: activeTimelineDuration,
+      language: "en",
+    });
+  }
+
+  function handleCaptionTrackChange(track: CaptionTrack) {
+    setCaptionTracks((prev) =>
+      prev.map((item) => (item.id === track.id ? track : item)),
+    );
+    setSelectedCaptionTrackId(track.id);
+  }
+
+  async function loadInstalledFonts() {
+    if (typeof window === "undefined") return;
+    const queryLocalFonts = (window as any).queryLocalFonts;
+    if (typeof queryLocalFonts !== "function") {
+      pushMind("This browser cannot list installed fonts. Showing web-safe fonts.");
+      return;
+    }
+    try {
+      const fonts = await queryLocalFonts();
+      const names: string[] = Array.from(
+        new Set(
+          fonts
+            .map((font: any) => String(font.family || "").trim())
+            .filter(Boolean),
+        ),
+      ) as string[];
+      names.sort((a, b) => a.localeCompare(b));
+      if (names.length > 0) {
+        setFontChoices((prev) => Array.from(new Set([...prev, ...names])));
+        pushMind(`Loaded ${names.length} installed fonts.`);
+      }
+    } catch {
+      pushMind("Font permission was not granted, so Encore kept the default font list.");
+    }
   }
 
   // Snapshot the current clips before a structural change, so undo/redo can
@@ -774,6 +1022,10 @@ export default function Editor() {
       const fallback = next[idx] ?? next[idx - 1] ?? null;
       setSelectedClipId(fallback ? fallback.id : null);
     }
+    setCaptionTracks((prev) => prev.filter((track) => track.clipId !== id));
+    if (captionTracks.some((track) => track.clipId === id)) {
+      setSelectedCaptionTrackId(null);
+    }
     if (menu?.clipId === id) setMenu(null);
   }
 
@@ -827,34 +1079,14 @@ export default function Editor() {
       pushMind("That cut is live — recut it to change the hook.");
       return;
     }
-    const v = CAPTION_VARIANTS[Math.floor(Math.random() * CAPTION_VARIANTS.length)];
-    commit(
-      clips.map((c) =>
-        c.id === id
-          ? { ...c, title: v.title, caption: v.caption, hashtags: v.hashtags }
-          : c,
-      ),
-    );
-    pushMind("Regenerated the caption with a fresh hook.");
+    void handleGenerateCaptions(id, "en");
   }
 
   function rerunAnalysis(id: string) {
     const clip = clips.find((c) => c.id === id);
     if (!clip) return;
-    const v = CAPTION_VARIANTS[Math.floor(Math.random() * CAPTION_VARIANTS.length)];
-    commit(
-      clips.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              title: v.title,
-              hashtags: v.hashtags,
-              tags: v.hashtags.map((t) => t.replace("#", "")),
-            }
-          : c,
-      ),
-    );
-    pushMind("Re-ran analysis on this beat — new title and tags.");
+    void handleGenerateCaptions(id, "en");
+    pushMind("Re-ran caption detection from the video's speech.");
   }
 
   async function downloadRenderedClip(clip: Clip) {
@@ -1410,6 +1642,9 @@ export default function Editor() {
       case "cut":
         handleSplit();
         break;
+      case "captions":
+        void generateCaptionsFromTransport();
+        break;
       case "trim-left":
         trimTakeToPlayhead("left");
         break;
@@ -1426,6 +1661,23 @@ export default function Editor() {
     clips.find((clip) => !clip.posted) ??
     clips[0] ??
     null;
+
+  const previewCaptionTrack =
+    (selectedClipId
+      ? captionTracks.find((track) => track.clipId === selectedClipId)
+      : null) ??
+    (selectedCaptionTrackId
+      ? captionTracks.find((track) => track.id === selectedCaptionTrackId)
+      : null) ??
+    captionTracks.find((track) =>
+      track.segments.some((segment) => time >= segment.start && time <= segment.end),
+    ) ??
+    null;
+
+  const previewCaptionSegment =
+    previewCaptionTrack?.segments.find(
+      (segment) => time >= segment.start && time <= segment.end,
+    ) ?? null;
 
   /** Publishes a cut and comes back with the verdict — the real YouTube / API path. */
   /**
@@ -1523,7 +1775,9 @@ export default function Editor() {
               flip: previewFlip,
               aspect,
               aiOn,
+              aiPermissionMode,
               compareOn,
+              captionTracks,
             },
             ...outcome,
           });
@@ -1594,31 +1848,17 @@ export default function Editor() {
     setPrompt("");
     setMessages((prev) => [...prev, youMessage(text)]);
     const targetId = video?.id || projectId || "notebook";
+    setChatBusy(true);
 
     try {
       const reply = await api.sendMessage(targetId, text);
       setMessages((prev) => [...prev, reply]);
-      if (!reply.pending) return;
-
-      // A live Mind answers asynchronously: the placeholder above holds the
-      // slot while we poll history for the real reply.
-      const landed = await api.waitForMindReply(targetId, reply.createdAt);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === reply.id
-            ? landed ?? {
-                ...m,
-                text: "The Mind is taking longer than usual — it will show up here when it answers.",
-                pending: false,
-              }
-            : m,
-        ),
-      );
     } catch (err: any) {
       pushMind(`Failed to reach Encore Mind: ${err.message || err}`);
+    } finally {
+      setChatBusy(false);
     }
   }
-
   /* ---- Transport ---- */
 
   // On-timeline length equals the real media time: once the file's metadata is
@@ -1916,16 +2156,25 @@ export default function Editor() {
         tool={tool}
         video={video}
         busy={busy}
+        analysisStatus={analysisStatus}
         moments={moments}
         clips={clips}
         messages={messages}
+        chatBusy={chatBusy}
         selectedClipId={selectedClipId}
+        captionTracks={captionTracks}
+        fontChoices={fontChoices}
+        mediaUrl={mediaUrl}
         prompt={prompt}
         onPrompt={setPrompt}
         onSend={handleSend}
         onReset={handleReset}
         onPickClip={setSelectedClipId}
         onClipChange={handleClipChange}
+        onRemoveHashtag={handleRemoveHashtag}
+        onGenerateCaptions={handleGenerateCaptions}
+        onCaptionTrackChange={handleCaptionTrackChange}
+        onLoadInstalledFonts={loadInstalledFonts}
         onClipContext={openMenu}
         onSeek={seek}
         onRecut={handleRecut}
@@ -2052,6 +2301,14 @@ export default function Editor() {
             {compareOn && mediaUrl ? (
               <span className="cut__compare" aria-hidden="true" />
             ) : null}
+            {previewCaptionSegment ? (
+              <span
+                className="cut__caption-preview"
+                style={{ fontFamily: previewCaptionTrack?.fontFamily ?? "Inter" }}
+              >
+                {previewCaptionSegment.text}
+              </span>
+            ) : null}
           </div>
 
           {aiOn ? (
@@ -2103,6 +2360,7 @@ export default function Editor() {
           selectedTakeId={selectedTakeId}
           clips={clips}
           selectedClipId={selectedClipId}
+          captionTracks={captionTracks}
           pxPerSecond={pxPerSecond}
           heightRem={timelineH}
           frames={frames}
@@ -2111,6 +2369,10 @@ export default function Editor() {
           onSeek={seek}
           onPickClip={(id) => {
             setSelectedClipId(id);
+            setTool("caption");
+          }}
+          onPickCaptionTrack={(id) => {
+            setSelectedCaptionTrackId(id);
             setTool("caption");
           }}
           onPickTakeSegment={(id) => {
@@ -2144,3 +2406,5 @@ export default function Editor() {
     </main>
   );
 }
+
+

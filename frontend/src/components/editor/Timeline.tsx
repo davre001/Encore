@@ -9,7 +9,7 @@ import {
   type WheelEvent,
 } from "react";
 import { ChevronsDownUp, ChevronsUpDown, Snowflake } from "lucide-react";
-import type { Clip, TakeSegment } from "@/types";
+import type { CaptionTrack, Clip, TakeSegment } from "@/types";
 import type { Frame } from "@/lib/mediaGraphics";
 import { formatTime } from "@/lib/timecode";
 
@@ -31,6 +31,7 @@ type TimelineProps = {
   selectedTakeId?: string | null;
   clips: Clip[];
   selectedClipId: string | null;
+  captionTracks: CaptionTrack[];
   pxPerSecond: number;
   heightRem: number;
   frames: Frame[];
@@ -38,6 +39,7 @@ type TimelineProps = {
   trimPulse: boolean;
   onSeek: (seconds: number) => void;
   onPickClip: (clipId: string) => void;
+  onPickCaptionTrack?: (trackId: string) => void;
   onPickTakeSegment?: (takeId: string) => void;
   onClipContextMenu: (clipId: string, x: number, y: number) => void;
   onTakeContextMenu: (takeId: string | null, x: number, y: number) => void;
@@ -99,6 +101,7 @@ export default function Timeline({
   selectedTakeId,
   clips,
   selectedClipId,
+  captionTracks,
   pxPerSecond,
   heightRem,
   frames,
@@ -106,6 +109,7 @@ export default function Timeline({
   trimPulse,
   onSeek,
   onPickClip,
+  onPickCaptionTrack,
   onPickTakeSegment,
   onClipContextMenu,
   onTakeContextMenu,
@@ -834,6 +838,37 @@ export default function Timeline({
                   </div>
                 );
               })}
+            </div>
+
+            <div className="cut__track cut__track--captions" role="presentation">
+              <span className="cut__track-name">Captions</span>
+              {captionTracks.flatMap((track) =>
+                track.segments.map((segment) => {
+                  const clip = clips.find((item) => item.id === track.clipId);
+                  const box = boxOf(segment.start, segment.end, 12);
+                  return (
+                    <button
+                      key={segment.id}
+                      type="button"
+                      className={`cut__block cut__block--caption${
+                        track.clipId === selectedClipId ? " is-selected" : ""
+                      }`}
+                      style={{ left: `${box.left}px`, width: `${box.width}px` }}
+                      title={`${segment.text} (${formatTime(segment.start)} - ${formatTime(segment.end)})`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onPickClip(track.clipId);
+                        onPickCaptionTrack?.(track.id);
+                        onSeek(segment.start);
+                      }}
+                    >
+                      <span className="cut__block-label">
+                        {segment.text || clip?.title || "Caption"}
+                      </span>
+                    </button>
+                  );
+                }),
+              )}
             </div>
 
             {span > 0 ? (

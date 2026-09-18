@@ -152,6 +152,25 @@ def update_moment(moment_id: str, patch: dict) -> Optional[dict]:
     return _update("moments", moment_id, patch)
 
 
+# --- analysis status -------------------------------------------------------
+def save_analysis_status(video_id: str, status: dict) -> dict:
+    record = {
+        "videoId": video_id,
+        "updatedAt": now_ms(),
+        **status,
+    }
+    with _LOCK:
+        rows = [s for s in _read("analysis_status") if s.get("videoId") != video_id]
+        rows.append(record)
+        _write("analysis_status", rows)
+    return record
+
+
+def get_analysis_status(video_id: str) -> Optional[dict]:
+    rows = _list_by("analysis_status", "videoId", video_id)
+    return rows[-1] if rows else None
+
+
 # --- clips -----------------------------------------------------------------
 def save_clip(clip: dict) -> dict:
     return _insert("clips", clip)
@@ -243,4 +262,3 @@ def delete_project(project_id: str) -> bool:
             _write("projects", new_rows)
             return True
         return False
-

@@ -35,6 +35,9 @@ MINDS_REPLY_TIMEOUT = float(os.getenv("MINDS_REPLY_TIMEOUT", "120"))
 YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET", "")
 YOUTUBE_REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL_TEXT = os.getenv("GEMINI_MODEL_TEXT", "gemini-3.5-flash-lite").strip()
+GEMINI_MODEL_VIDEO = os.getenv("GEMINI_MODEL_VIDEO", "gemini-3.5-flash-lite").strip()
 
 # --- Auth -------------------------------------------------------------------
 # Development gets a stable-enough secret from the Minds key when present, but
@@ -99,6 +102,7 @@ def capabilities() -> dict[str, bool]:
         # Minds talks plain HTTP through httpx (a core dep), so the key is the
         # only gate — there is no Python SDK for the Animoca Builder API.
         "minds": bool(MINDS_BUILDER_API_KEY),
+        "gemini": bool(GEMINI_API_KEY),
         "youtube": bool(
             YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET and YOUTUBE_REFRESH_TOKEN
         )

@@ -13,6 +13,21 @@ from ..services import captions, ffmpeg
 
 router = APIRouter()
 
+DEMO_LABELS = {"Confession hook", "Talking-head tip", "Exam-panic rant"}
+LEGACY_FALLBACK_REASONS = {"Detected from the video's spoken transcript."}
+
+
+def _from_demo_moment(clip: dict) -> bool:
+    moment_id = clip.get("momentId")
+    moment = storage.get_moment(moment_id) if moment_id else None
+    return bool(
+        moment
+        and (
+            moment.get("label") in DEMO_LABELS
+            or moment.get("reason") in LEGACY_FALLBACK_REASONS
+        )
+    )
+
 
 @router.get("/{video_id}", response_model=list[Clip])
 async def list_clips(
@@ -22,6 +37,7 @@ async def list_clips(
     clips = storage.list_clips(video_id)
     if user_id:
         clips = [c for c in clips if c.get("userId") == user_id or not c.get("userId")]
+    clips = [c for c in clips if not _from_demo_moment(c)]
     return [Clip.model_validate(c) for c in clips]
 
 
@@ -42,6 +58,30 @@ async def render_clip(
         rendered = ffmpeg.render_clip(src_path, record["start"], record["end"])
         record = storage.update_clip(clip_id, {"renderPath": rendered}) or record
     return Clip.model_validate(record)
+
+
+@router.delete("/{clip_id}/hashtags/{hashtag}", response_model=Clip)
+async def remove_clip_hashtag(
+    clip_id: str,
+    hashtag: str,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> Clip:
+    """Remove one hashtag from a draft clip and persist the user's choice."""
+    record = storage.get_clip(clip_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if user_id and record.get("userId") and record["userId"] != user_id:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if record.get("posted"):
+        raise HTTPException(status_code=409, detail="cannot edit a posted clip")
+
+    next_hashtags = [
+        tag for tag in record.get("hashtags", []) if str(tag) != hashtag
+    ]
+    updated = storage.update_clip(clip_id, {"hashtags": next_hashtags})
+    if updated is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    return Clip.model_validate(updated)
 
 
 @router.get("/{clip_id}/file")

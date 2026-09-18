@@ -1,6 +1,9 @@
 import type {
   AnalyticsData,
+  AnalysisStatus,
   AuthSession,
+  CaptionLanguage,
+  CaptionTrack,
   Clip,
   Decision,
   Message,
@@ -93,6 +96,14 @@ export async function listMoments(videoId: string): Promise<Moment[]> {
   return handleResponse<Moment[]>(res);
 }
 
+/** Current AI analysis stage for a video's moment detection job. */
+export async function getAnalysisStatus(videoId: string): Promise<AnalysisStatus> {
+  const res = await fetch(`${API}/videos/${encodeURIComponent(videoId)}/analysis`, {
+    headers: userHeaders(),
+  });
+  return handleResponse<AnalysisStatus>(res);
+}
+
 /** Accept or reject a moment. */
 export async function decideMoment(
   momentId: string,
@@ -159,6 +170,36 @@ export async function updateClip(
     body: JSON.stringify(patch),
   });
   return handleResponse<Clip>(res);
+}
+
+/** Remove one hashtag from a draft clip and persist the choice. */
+export async function removeClipHashtag(
+  clipId: string,
+  hashtag: string
+): Promise<Clip> {
+  const res = await fetch(
+    `${API}/clips/${encodeURIComponent(clipId)}/hashtags/${encodeURIComponent(hashtag)}`,
+    { method: "DELETE", headers: userHeaders() }
+  );
+  return handleResponse<Clip>(res);
+}
+
+/** Generate timed on-video captions for a clip. */
+export async function generateCaptionTrack(input: {
+  clipId: string;
+  videoId?: string;
+  title: string;
+  caption: string;
+  start: number;
+  end: number;
+  language: CaptionLanguage;
+}): Promise<CaptionTrack> {
+  const res = await fetch(`${API}/captions/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...userHeaders() },
+    body: JSON.stringify(input),
+  });
+  return handleResponse<CaptionTrack>(res);
 }
 
 /** Publish a clip to YouTube. */
@@ -236,6 +277,7 @@ export async function getHealth(): Promise<{
     ffprobe: boolean;
     whisper: boolean;
     minds: boolean;
+    gemini: boolean;
     youtube: boolean;
   };
 }> {
@@ -247,6 +289,7 @@ export async function getHealth(): Promise<{
       ffprobe: boolean;
       whisper: boolean;
       minds: boolean;
+      gemini: boolean;
       youtube: boolean;
     };
   }>(res);

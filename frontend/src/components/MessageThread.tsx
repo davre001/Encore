@@ -79,18 +79,13 @@ export default function MessageThread({
         <AnimatePresence>
           {busy ? (
             <motion.div
-              className="bubble bubble--mind thread__typing"
+              className="thread__thinking"
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: DUR.fast, ease: EASE }}
             >
-              <span className="bubble__who">Encore</span>
-              <span className="thread__dots" aria-label="Encore is typing">
-                <span />
-                <span />
-                <span />
-              </span>
+              Thinking...
             </motion.div>
           ) : null}
         </AnimatePresence>

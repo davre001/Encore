@@ -502,6 +502,14 @@ def chat_reply(
     return _intelligent_fallback(text, context, memories)
 
 
+def _moment_count_guidance(span: float) -> tuple[int, int, str]:
+    if span < 45:
+        return 1, 3, "short takes under 45 seconds usually have 1 to 3 strong moments"
+    if span < 120:
+        return 3, 6, "takes from 45 seconds to 2 minutes usually have 3 to 6 strong moments"
+    return 5, 10, "takes over 2 minutes usually have 5 to 10 strong moments"
+
+
 def propose_moments(transcript: list[dict], span: float) -> Optional[list[dict]]:
     """Ask the Mind for standalone beats given a transcript."""
     if not available() or not transcript:
@@ -520,10 +528,14 @@ def propose_moments(transcript: list[dict], span: float) -> Optional[list[dict]]
 
     # Dedicated alias so moment extraction NEVER touches the creator's notebook thread
     moments_alias = f"{MINDS_ALIAS}-moments"
+    min_moments, max_moments, count_note = _moment_count_guidance(span)
     prompt = (
         f"Here is the dialogue transcript of a {span:.0f}s video take:\n"
         f"{lines}\n\n"
-        "From this dialogue, pick 2 to 4 highlight moments that work well as standalone Shorts. "
+        "From this dialogue, find every distinct highlight moment that works as a standalone Short. "
+        f"Count guidance: {count_note}. Aim for {min_moments} to {max_moments} moments "
+        "when the dialogue supports it, but return fewer if only fewer sections are strong. "
+        "Do not invent topics or split the take evenly. "
         "For each moment, format as JSON: "
         '[{"start": number, "end": number, "label": "string", "reason": "string"}]'
     )

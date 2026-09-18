@@ -1,4 +1,4 @@
-"""Video upload + fetch — tags every video with the uploading user's id."""
+"""Video upload + fetch routes."""
 
 import mimetypes
 import os
@@ -7,22 +7,63 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from ..dependencies import get_user_id
-from ..models.schemas import Video
 from .. import storage
-from ..services import analyze, ffmpeg, transcribe
+from ..dependencies import get_user_id
+from ..models.schemas import AnalysisStatus, Video
+from ..services import analyze, ffmpeg, gemini, transcribe
 
 router = APIRouter()
 
 
+def _status(video_id: str, stage: str, message: str, **extra) -> None:
+    storage.save_analysis_status(
+        video_id,
+        {
+            "stage": stage,
+            "message": message,
+            "done": stage in {"complete", "empty", "error"},
+            **extra,
+        },
+    )
+
+
 def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
-    """Background: transcribe → detect beats → persist. Never raises."""
+    """Background analysis pipeline. Never raises."""
     try:
+        _status(video_id, "thinking", "Preparing the video for analysis.")
+        _status(video_id, "transcribing", "Reading the audio and speech timing.")
         transcript = transcribe.transcribe(src_path)
-        moments = analyze.find_moments(video_id, duration, transcript)
+        _status(video_id, "watching", "Watching the video for standout moments.")
+        moments = analyze.find_moments(video_id, duration, transcript, src_path)
+        _status(video_id, "generating", "Turning the strongest beats into proposed cuts.")
         storage.save_moments(video_id, moments)
+        if moments:
+            suffix = "s" if len(moments) != 1 else ""
+            _status(video_id, "complete", f"Found {len(moments)} standout moment{suffix}.")
+            return
+
+        ai_error = gemini.last_error()
+        if ai_error:
+            _status(
+                video_id,
+                "error",
+                ai_error["message"],
+                errorType=ai_error["errorType"],
+            )
+        else:
+            _status(
+                video_id,
+                "empty",
+                "Finished analysis, but no strong standalone moments were found.",
+            )
     except Exception:
         storage.save_moments(video_id, [])
+        _status(
+            video_id,
+            "error",
+            "Unexpected error while analyzing the video.",
+            errorType="unknown",
+        )
 
 
 @router.post("", response_model=Video)
@@ -42,14 +83,15 @@ async def upload_video(
     )
     record = video.model_dump(by_alias=True)
     record["srcPath"] = src_path
-    record["userId"] = user_id          # tag with owner
+    record["userId"] = user_id
     storage.save_video(record)
+    _status(video.id, "uploaded", "Upload complete. Preparing analysis.")
 
     storage.save_message(
         {
             "id": storage.new_id("msg"),
             "role": "mind",
-            "text": "Watching the tape and cutting the beats that stand alone…",
+            "text": "I am preparing the video, reading the audio, and looking for beats that stand alone.",
             "createdAt": storage.now_ms(),
             "videoId": video.id,
             "userId": user_id,
@@ -60,6 +102,26 @@ async def upload_video(
     return video
 
 
+@router.get("/{video_id}/analysis", response_model=AnalysisStatus)
+async def get_analysis_status(
+    video_id: str,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> AnalysisStatus:
+    record = storage.get_video(video_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="video not found")
+    if user_id and record.get("userId") and record["userId"] != user_id:
+        raise HTTPException(status_code=404, detail="video not found")
+    status = storage.get_analysis_status(video_id) or {
+        "videoId": video_id,
+        "stage": "queued",
+        "message": "Waiting to start analysis.",
+        "updatedAt": storage.now_ms(),
+        "done": False,
+    }
+    return AnalysisStatus.model_validate(status)
+
+
 @router.get("/{video_id}", response_model=Video)
 async def get_video(
     video_id: str,
@@ -68,7 +130,6 @@ async def get_video(
     record = storage.get_video(video_id)
     if record is None:
         raise HTTPException(status_code=404, detail="video not found")
-    # Enforce ownership only when both sides have a userId set
     if user_id and record.get("userId") and record["userId"] != user_id:
         raise HTTPException(status_code=404, detail="video not found")
     return Video.model_validate(record)

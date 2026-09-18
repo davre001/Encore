@@ -290,6 +290,13 @@
   gap: 0.35rem;
 }
 
+.thread__thinking {
+  color: var(--mute);
+  font-size: 0.84rem;
+  font-style: italic;
+  padding-left: 0.1rem;
+}
+
 .thread__dots {
   display: inline-flex;
   align-items: center;

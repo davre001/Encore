@@ -28,6 +28,24 @@ export type Moment = {
   status: MomentStatus;
 };
 
+export type AnalysisStatus = {
+  videoId: string;
+  stage:
+    | "queued"
+    | "uploaded"
+    | "thinking"
+    | "transcribing"
+    | "watching"
+    | "generating"
+    | "complete"
+    | "empty"
+    | "error";
+  message: string;
+  updatedAt: number;
+  errorType?: "network" | "timeout" | "quota" | "api" | "unknown" | null;
+  done: boolean;
+};
+
 export type Clip = {
   id: string;
   momentId: string;
@@ -119,7 +137,6 @@ export type CaptionTrack = {
   language: CaptionLanguage;
   fontFamily: string;
   fontSource?: string;
-  fontUrl?: string;
   segments: CaptionSegment[];
 };
 
