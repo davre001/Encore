@@ -458,6 +458,63 @@ def chat_reply(
     return generate_text(prompt)
 
 
+def propose_post_copy(moment: dict, transcript_hint: str = "") -> Optional[dict]:
+    label = str(moment.get("label") or "Moment").strip()
+    reason = str(moment.get("reason") or "").strip()
+    start = float(moment.get("start") or 0)
+    end = float(moment.get("end") or 0)
+    schema = {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "caption": {"type": "string"},
+            "hashtags": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["title", "caption", "hashtags", "tags"],
+    }
+    prompt = (
+        "Write platform-ready short-form post copy for a creator's video cut.\n"
+        "Do not use generic filler like 'Long video to short cut' or mention the editor app.\n"
+        "Make the title specific to the moment, curiosity-driven, and under 70 characters.\n"
+        "Make the caption sound human, specific, and shareable. Use 1-2 short paragraphs.\n"
+        "Return 5-8 relevant hashtags and 4-8 plain search tags.\n\n"
+        f"Moment label: {label}\n"
+        f"Timestamp: {start:.1f}-{end:.1f}s\n"
+        f"Why it hits: {reason or 'Strong standalone beat.'}\n"
+        f"{transcript_hint or ''}"
+    )
+    data = _generate_json(prompt, schema, timeout_s=45.0)
+    if not isinstance(data, dict):
+        return None
+    title = str(data.get("title") or label).strip()
+    caption = str(data.get("caption") or "").strip()
+    hashtags = data.get("hashtags")
+    tags = data.get("tags")
+    if not title or not caption:
+        return None
+    clean_hashtags = []
+    if isinstance(hashtags, list):
+        for tag in hashtags[:10]:
+            value = str(tag).strip()
+            if not value:
+                continue
+            clean_hashtags.append(value if value.startswith("#") else f"#{value}")
+    clean_tags = [str(tag).strip() for tag in tags[:10] if str(tag).strip()] if isinstance(tags, list) else []
+    return {
+        "title": title[:90],
+        "caption": caption,
+        "hashtags": clean_hashtags,
+        "tags": clean_tags,
+    }
+
+
 def propose_caption_segments(
     *,
     title: str,

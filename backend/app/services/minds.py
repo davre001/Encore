@@ -567,9 +567,12 @@ def write_caption(label: str, hint: str = "") -> Optional[dict]:
         return None
     copy_alias = f"{MINDS_ALIAS}-copy"
     prompt = (
-        f"Write short-form post copy for a creator clip. Style label: '{label}'. {hint} "
-        "Format as JSON with keys title (string), caption (string), hashtags (array of #tags), "
-        "tags (array of plain words)."
+        f"Write platform-ready short-form post copy for a creator clip. Moment label: '{label}'. {hint} "
+        "Avoid generic filler, avoid mentioning Encore, and make the copy specific to this exact moment. "
+        "Title: under 70 characters, curiosity-driven, not clickbait. "
+        "Caption: human, specific, 1-2 short paragraphs. "
+        "Format as JSON with keys title (string), caption (string), hashtags (array of 5-8 #tags), "
+        "tags (array of 4-8 plain words)."
     )
     data = _complete_json(prompt, timeout_s=INLINE_TIMEOUT, alias=copy_alias, want=dict)
     if not isinstance(data, dict):

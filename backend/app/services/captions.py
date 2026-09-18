@@ -7,7 +7,7 @@ produces the same copy the mock UI shows today.
 
 from typing import Optional
 
-from . import minds
+from . import gemini, minds
 
 # The exact hook lines from buildClipFromMoment().
 _HOOKS: dict[str, str] = {
@@ -37,6 +37,11 @@ def build_post_copy(moment: dict, transcript: Optional[list[dict]] = None) -> di
     """Return {title, caption, hashtags, tags} for a moment."""
     label = str(moment.get("label", "Moment"))
 
+    if gemini.available():
+        copy = gemini.propose_post_copy(moment, _transcript_hint(moment, transcript))
+        if copy:
+            return copy
+
     if minds.available():
         copy = minds.write_caption(label, _transcript_hint(moment, transcript))
         if copy:
@@ -46,7 +51,7 @@ def build_post_copy(moment: dict, transcript: Optional[list[dict]] = None) -> di
     title = _HOOKS.get(label, label)
     return {
         "title": title,
-        "caption": f"{title}\n\nLong video → short cut. Encore kept the beat.",
+        "caption": f"{title}\n\nThis was the part worth pulling out of the full take.",
         "hashtags": list(_HASHTAGS),
         "tags": list(_TAGS),
     }

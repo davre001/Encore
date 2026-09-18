@@ -342,9 +342,6 @@ export default function Editor() {
           if (proj.effects.flip !== undefined) setPreviewFlip(proj.effects.flip);
           if (proj.effects.aspect) setAspect(proj.effects.aspect);
           if (proj.effects.aiOn !== undefined) setAiOn(proj.effects.aiOn);
-          if (proj.effects.aiPermissionMode) {
-            setAiPermissionMode(proj.effects.aiPermissionMode);
-          }
           if (proj.effects.compareOn !== undefined) setCompareOn(proj.effects.compareOn);
           if (proj.effects.captionTracks) {
             setCaptionTracks(proj.effects.captionTracks);
@@ -561,6 +558,19 @@ export default function Editor() {
           : "Permission mode set to Ask every time.\n\nI will wait for you to approve moments and posting actions.",
       );
     }
+    if (mode === "auto" && moments.some((moment) => moment.status === "pending") && !busy) {
+      void autoApproveMoments(moments);
+    }
+  }
+
+  async function resolvePermissionMode() {
+    try {
+      const settings = await api.getAiSettings();
+      setAiPermissionMode(settings.aiPermissionMode);
+      return settings.aiPermissionMode;
+    } catch {
+      return aiPermissionMode;
+    }
   }
 
   /* ---- Take ---- */
@@ -688,7 +698,8 @@ export default function Editor() {
       setBusy(false);
 
       if (foundMoments.length > 0) {
-        if (aiPermissionMode === "auto") {
+        const mode = await resolvePermissionMode();
+        if (mode === "auto") {
           await autoApproveMoments(foundMoments);
         } else {
           pushMind(
@@ -751,36 +762,58 @@ export default function Editor() {
   async function autoApproveMoments(nextMoments: Moment[]) {
     const pending = nextMoments.filter((moment) => moment.status === "pending").slice(0, 3);
     if (!pending.length) return;
+    setBusy(true);
 
-    pushMind(
-      `Auto approve is on.\n\nAccepting the ${pending.length} strongest moment${
-        pending.length === 1 ? "" : "s"
-      }, creating cuts, and preparing the best one to post.`,
-    );
+    try {
+      pushMind(
+        `Auto approve is on.\n\nAccepting the ${pending.length} strongest moment${
+          pending.length === 1 ? "" : "s"
+        }, creating cuts, drafting copy, adding captions, and preparing the best one to post.`,
+      );
 
-    let nextClips: Clip[] = [];
-    for (const moment of pending) {
-      const updated = await api.decideMoment(moment.id, "accept");
-      setMoments((prev) => prev.map((m) => (m.id === moment.id ? updated : m)));
+      let nextClips: Clip[] = [];
+      const acceptedMoments: Moment[] = [];
+      for (const moment of pending) {
+        const updated = await api.decideMoment(moment.id, "accept");
+        acceptedMoments.push(updated);
+        setMoments((prev) => prev.map((m) => (m.id === moment.id ? updated : m)));
+      }
+      if (acceptedMoments.length) {
+        setMoments((prev) =>
+          prev.map(
+            (moment) =>
+              acceptedMoments.find((item) => item.id === moment.id) ?? moment,
+          ),
+        );
+      }
+
+      const vidId = video?.id || pending[0]?.videoId;
+      if (vidId) {
+        nextClips = await api.listClips(vidId);
+        setClips(nextClips);
+        serverClipIds.current = new Set(nextClips.map((clip) => clip.id));
+      }
+
+      const bestClip =
+        nextClips.find((clip) => pending.some((moment) => moment.id === clip.momentId)) ??
+        nextClips.find((clip) => !clip.posted) ??
+        null;
+      if (!bestClip) return;
+
+      setSelectedClipId(bestClip.id);
+      await generateCaptionTrackForRange({
+        clipId: bestClip.id,
+        title: bestClip.title,
+        caption: bestClip.caption,
+        start: bestClip.start,
+        end: bestClip.end,
+        language: "en",
+      });
+      await shipToYouTube(bestClip);
+      setTool("cuts");
+    } finally {
+      setBusy(false);
     }
-
-    const vidId = video?.id || pending[0]?.videoId;
-    if (vidId) {
-      nextClips = await api.listClips(vidId);
-      setClips(nextClips);
-      serverClipIds.current = new Set(nextClips.map((clip) => clip.id));
-    }
-
-    const bestClip =
-      nextClips.find((clip) => pending.some((moment) => moment.id === clip.momentId)) ??
-      nextClips.find((clip) => !clip.posted) ??
-      null;
-    if (!bestClip) return;
-
-    setSelectedClipId(bestClip.id);
-    await handleGenerateCaptions(bestClip.id, "en");
-    await shipToYouTube(bestClip);
-    setTool("cuts");
   }
 
   function handleReset() {
@@ -1982,7 +2015,8 @@ export default function Editor() {
       setMoments(foundMoments);
 
       if (foundMoments.length > 0) {
-        if (aiPermissionMode === "auto") {
+        const mode = await resolvePermissionMode();
+        if (mode === "auto") {
           pushMind(
             `Done. I regenerated ${foundMoments.length} moment${
               foundMoments.length === 1 ? "" : "s"
