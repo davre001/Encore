@@ -19,6 +19,23 @@ from .. import storage
 router = APIRouter()
 
 
+def _verified_status(status: str | None, post_id: str | None, post_url: str | None) -> str:
+    current = status or "draft"
+    if current in {"posted", "checked"} and not (post_id and post_url):
+        return "draft"
+    return current
+
+
+def _storage_to_response(project: dict) -> ProjectResponse:
+    next_project = {**project}
+    next_project["status"] = _verified_status(
+        next_project.get("status"),
+        next_project.get("postId"),
+        next_project.get("postUrl"),
+    )
+    return ProjectResponse.model_validate(next_project)
+
+
 def _db_to_response(db_proj: DBProject) -> ProjectResponse:
     take_segments = []
     clips = []
@@ -46,7 +63,7 @@ def _db_to_response(db_proj: DBProject) -> ProjectResponse:
         name=db_proj.name,
         video_id=db_proj.video_id,
         media_url=db_proj.media_url,
-        status=db_proj.status or "draft",
+        status=_verified_status(db_proj.status, db_proj.post_id, db_proj.post_url),
         take_in=db_proj.take_in or 0.0,
         take_out=db_proj.take_out or 0.0,
         take_segments=take_segments,
@@ -160,7 +177,7 @@ def save_or_create_project(
     else:
         storage.save_project(storage_dict)
 
-    return ProjectResponse.model_validate(storage_dict)
+    return _storage_to_response(storage_dict)
 
 
 @router.get("", response_model=list[ProjectResponse])
@@ -183,7 +200,7 @@ def list_projects(
     stored = storage.list_projects()
     if user_id:
         stored = [p for p in stored if p.get("userId") == user_id]
-    return [ProjectResponse.model_validate(p) for p in stored]
+    return [_storage_to_response(p) for p in stored]
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
@@ -208,7 +225,7 @@ def get_project(
         raise HTTPException(status_code=404, detail="Project not found")
     if user_id and stored.get("userId") and stored["userId"] != user_id:
         raise HTTPException(status_code=404, detail="Project not found")
-    return ProjectResponse.model_validate(stored)
+    return _storage_to_response(stored)
 
 
 @router.patch("/{project_id}", response_model=ProjectResponse)
@@ -319,9 +336,9 @@ def update_project(
             "updatedAt": now,
         }
         storage.save_project(full_dict)
-        return ProjectResponse.model_validate(full_dict)
+        return _storage_to_response(full_dict)
 
-    return ProjectResponse.model_validate(updated)
+    return _storage_to_response(updated)
 
 
 @router.delete("/{project_id}", response_model=MessageResponse)

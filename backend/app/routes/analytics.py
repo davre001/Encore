@@ -5,6 +5,7 @@ import time
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
+from .. import storage
 from ..dependencies import get_user_id
 from ..models.schemas import (
     AnalyticsDataResponse,
@@ -14,6 +15,7 @@ from ..models.schemas import (
 )
 from ..models.user import PostAnalytics, PlaybookRule, Project
 from ..db import SessionLocal
+from ..services import analytics as analytics_service, youtube
 
 router = APIRouter()
 
@@ -28,6 +30,58 @@ async def get_analytics(
         if user_id:
             pa_q = pa_q.filter(PostAnalytics.user_id == user_id)
         post_rows = pa_q.order_by(PostAnalytics.created_at.desc()).limit(100).all()
+
+        for row in post_rows:
+            if not row.post_id or not row.clip_id:
+                continue
+            clip = storage.get_clip(row.clip_id)
+            post = storage.get_post(row.post_id) or {
+                "id": row.post_id,
+                "postId": row.post_id,
+                "views": row.views,
+                "postUrl": row.post_url,
+                "userId": row.user_id,
+            }
+            if not clip:
+                continue
+            try:
+                stats = youtube.stats(clip, post, user_id=user_id)
+                check = analytics_service.build_post_check(
+                    clip,
+                    row.post_id,
+                    int(stats.get("views", row.views) if isinstance(stats, dict) else stats),
+                )
+            except Exception:
+                continue
+            row.views = int(check["views"])
+            row.verdict = check["verdict"]
+            row.note = check["note"]
+            storage.update_post(
+                row.post_id,
+                {
+                    "views": row.views,
+                    "verdict": row.verdict,
+                    "postUrl": row.post_url,
+                    "checkedAt": storage.now_ms(),
+                },
+            )
+            project = None
+            if row.project_id:
+                project = db.query(Project).filter(Project.id == row.project_id).first()
+            if not project:
+                project_q = db.query(Project).filter(Project.post_id == row.post_id)
+                if user_id:
+                    project_q = project_q.filter(Project.user_id == user_id)
+                project = project_q.first()
+            if project:
+                project.status = "checked"
+                project.views = row.views
+                project.verdict = row.verdict
+                if row.post_url:
+                    project.post_url = row.post_url
+                project.post_id = row.post_id
+                project.updated_at = storage.now_ms()
+        db.commit()
 
         proj_q = db.query(Project).filter(
             Project.status.in_(["posted", "checked"]), Project.views.isnot(None)

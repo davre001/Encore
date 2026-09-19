@@ -160,6 +160,65 @@ function parsePermissionCommand(text: string): "auto" | "ask" | "help" | null {
   return "help";
 }
 
+function parseTimeInput(value: string): number | null {
+  const clean = value.trim();
+  if (!clean) return null;
+  if (!clean.includes(":")) {
+    const seconds = Number(clean);
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+  }
+  const parts = clean.split(":").map((part) => Number(part));
+  if (parts.some((part) => !Number.isFinite(part) || part < 0)) return null;
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return null;
+}
+
+function parseCutCommand(text: string): { start: number; end: number } | null {
+  const lower = text.trim().toLowerCase();
+  const asksForCut = lower.startsWith("/cut") || /\b(create|make|add)\b.*\bcut\b/.test(lower);
+  if (!asksForCut) return null;
+  const range = lower.match(/(?:from\s+)?(\d+(?::\d+){0,2}(?:\.\d+)?)\s*(?:-|to|until|through)\s*(\d+(?::\d+){0,2}(?:\.\d+)?)/);
+  if (!range) return null;
+  const start = parseTimeInput(range[1]);
+  const end = parseTimeInput(range[2]);
+  if (start === null || end === null || end <= start) return null;
+  return { start, end };
+}
+
+function isPublishPrompt(text: string) {
+  const lower = text.trim().toLowerCase();
+  return (
+    lower === "/publish" ||
+    lower === "/post" ||
+    /\b(post|publish|upload|share)\b.*\byoutube\b/.test(lower)
+  );
+}
+
+function isCreateMomentsPrompt(text: string) {
+  const lower = text.trim().toLowerCase();
+  return (
+    lower === "/moments" ||
+    lower === "/cuts" ||
+    /\b(load|create|make|add|accept|keep|turn)\b.*\b(moment|moments|beat|beats)\b.*\b(timeline|cut|cuts|clip|clips)?\b/.test(lower) ||
+    /\b(create|make|add)\b.*\b(best|strongest)\b.*\b(cut|cuts|clip|clips|moment|moments)\b/.test(lower)
+  );
+}
+
+function isCaptionPrompt(text: string) {
+  const lower = text.trim().toLowerCase();
+  return lower === "/captions" || /\b(add|create|generate|make)\b.*\b(caption|captions|subtitles|cc)\b/.test(lower);
+}
+
+function wantsFullAutoPost(text: string) {
+  const lower = text.trim().toLowerCase();
+  return (
+    isPublishPrompt(text) ||
+    /\b(create|make|cut|load|accept|keep)\b.*\b(moment|moments|cut|cuts|clip|clips)\b.*\b(post|publish|upload|share)\b/.test(lower) ||
+    /\b(post|publish|upload|share)\b.*\b(best|strongest)\b.*\b(moment|cut|clip)\b/.test(lower)
+  );
+}
+
 function timedOutAnalysisStatus(videoId: string): AnalysisStatus {
   return {
     videoId,
@@ -1865,6 +1924,43 @@ export default function Editor() {
         await api.saveEditorEvent(video?.id || projectId || "notebook", postedMessage).catch(() => null);
       }
 
+      const postedClips = clips.map((c) =>
+        c.id === clip.id ? { ...ready, posted: true, postId, postUrl } : c,
+      );
+      try {
+        const postedOutcome = {
+          status: "posted" as const,
+          postUrl,
+          postId,
+        };
+        if (projectId) {
+          await api.updateProject(projectId, { ...postedOutcome, clips: postedClips });
+        } else {
+          const saved = await api.saveProject({
+            name: projectName || "Untitled Take",
+            videoId: video?.id || null,
+            mediaUrl: mediaUrl || null,
+            takeIn,
+            takeOut,
+            takeSegments,
+            clips: postedClips,
+            effects: {
+              rotate: previewRotate,
+              flip: previewFlip,
+              aspect,
+              aiOn,
+              aiPermissionMode,
+              compareOn,
+              captionTracks,
+            },
+            ...postedOutcome,
+          });
+          if (saved?.id) setProjectId(saved.id);
+        }
+      } catch {
+        /* Backend post verification has already been recorded by /api/posts. */
+      }
+
       if (typeof window !== "undefined") {
         window.location.assign(postUrl);
       }
@@ -2075,6 +2171,139 @@ export default function Editor() {
       .catch(() => {});
   }, [video?.id, projectId]);
 
+  async function runAiEditorAction(commandText: string, opts: { captions?: boolean; publish?: boolean } = {}) {
+    const targetId = video?.id || projectId || "notebook";
+    await api.saveEditorEvent(targetId, commandText, "you").catch(() => null);
+
+    if (!video?.id && !clips.length) {
+      pushMind("Upload a video first, then I can create moments, cuts, captions, and publish from it.");
+      return;
+    }
+
+    setTool("cuts");
+    setBusy(true);
+    try {
+      let workingMoments = moments;
+      let workingClips = clips;
+
+      if (video?.id && workingMoments.length === 0) {
+        pushMind("Finding the strongest moments in this take now...");
+        const started = await api.retryAnalysis(video.id);
+        setAnalysisStatus(started);
+        const result = await pollMomentAnalysis(video.id);
+        workingMoments = result.foundMoments;
+        setMoments(workingMoments);
+      }
+
+      const pending = workingMoments.filter((moment) => moment.status === "pending").slice(0, 3);
+      if (pending.length > 0) {
+        pushMind(`Loading ${pending.length} best moment${pending.length === 1 ? "" : "s"} into the timeline now.`);
+        const accepted: Moment[] = [];
+        for (const moment of pending) {
+          const updated = await api.decideMoment(moment.id, "accept");
+          accepted.push(updated);
+        }
+        setMoments((prev) =>
+          prev.map((moment) => accepted.find((item) => item.id === moment.id) ?? moment),
+        );
+      }
+
+      if (video?.id) {
+        workingClips = await api.listClips(video.id);
+        setClips(workingClips);
+        serverClipIds.current = new Set(workingClips.map((clip) => clip.id));
+      }
+
+      const bestClip =
+        workingClips.find((clip) => !clip.posted) ??
+        workingClips[0] ??
+        exportClip ??
+        null;
+
+      if (!bestClip) {
+        pushMind("I could not create a cut yet. Try /redo to rerun moment detection, or use /cut 0:12 to 0:25.");
+        return;
+      }
+
+      setSelectedClipId(bestClip.id);
+
+      if (opts.captions || opts.publish) {
+        await generateCaptionTrackForRange({
+          clipId: bestClip.id,
+          title: bestClip.title,
+          caption: bestClip.caption,
+          start: bestClip.start,
+          end: bestClip.end,
+          language: "en",
+        });
+      }
+
+      if (opts.publish) {
+        await shipToYouTube(bestClip);
+      } else {
+        pushMind(
+          opts.captions
+            ? `Created the best cut and added captions for "${bestClip.title}".`
+            : `Created the best cut: "${bestClip.title}".`,
+        );
+      }
+    } catch (err: any) {
+      pushMind(`AI action failed: ${err.message || err}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createCutFromChat(commandText: string, range: { start: number; end: number }) {
+    const targetId = video?.id || projectId || "notebook";
+    await api.saveEditorEvent(targetId, commandText, "you").catch(() => null);
+
+    if (!video?.id) {
+      pushMind("Upload a video first, then I can create a cut from that range.");
+      return;
+    }
+
+    const maxEnd = mediaDuration || video.duration || takeOut || range.end;
+    const start = Math.max(0, Math.min(range.start, maxEnd));
+    const end = Math.max(start + 0.1, Math.min(range.end, maxEnd));
+    if (end <= start + 0.1) {
+      pushMind("That cut range is too short. Try something like /cut 0:12 to 0:25.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const title = `Cut ${formatTime(start)}-${formatTime(end)}`;
+      const created = await api.createClip({
+        videoId: video.id,
+        start,
+        end,
+        title,
+        label: title,
+      });
+      serverClipIds.current.add(created.id);
+      commit([...clips, created]);
+      setSelectedClipId(created.id);
+      setTool("cuts");
+      pushMind(`Created "${created.title}" from ${formatTime(start)} to ${formatTime(end)}.`);
+    } catch (err: any) {
+      pushMind(`Could not create that cut: ${err.message || err}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function publishFromChat(commandText: string) {
+    const targetId = video?.id || projectId || "notebook";
+    await api.saveEditorEvent(targetId, commandText, "you").catch(() => null);
+    if (!exportClip) {
+      pushMind("Create or select a cut first, then I can publish it to YouTube.");
+      return;
+    }
+    setSelectedClipId(exportClip.id);
+    await shipToYouTube(exportClip);
+  }
+
   async function handleSend(text: string) {
     setPrompt("");
     setMessages((prev) => [...prev, youMessage(text)]);
@@ -2096,6 +2325,32 @@ export default function Editor() {
 
     if (isMomentRegenerationPrompt(text)) {
       await regenerateMomentsFromChat(text);
+      return;
+    }
+
+    if (wantsFullAutoPost(text)) {
+      await runAiEditorAction(text, { captions: true, publish: true });
+      return;
+    }
+
+    if (isCaptionPrompt(text)) {
+      await runAiEditorAction(text, { captions: true });
+      return;
+    }
+
+    if (isCreateMomentsPrompt(text)) {
+      await runAiEditorAction(text, { captions: /\b(caption|captions|subtitles|cc)\b/i.test(text) });
+      return;
+    }
+
+    const cutCommand = parseCutCommand(text);
+    if (cutCommand) {
+      await createCutFromChat(text, cutCommand);
+      return;
+    }
+
+    if (isPublishPrompt(text)) {
+      await publishFromChat(text);
       return;
     }
 

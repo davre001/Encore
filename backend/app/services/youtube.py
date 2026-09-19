@@ -1,4 +1,4 @@
-﻿"""YouTube publishing integration.
+"""YouTube publishing integration.
 
 Uploads use the connected user's OAuth refresh token when present. A legacy
 environment refresh token is still accepted for local development, but routes
@@ -110,7 +110,7 @@ def publish(clip: dict, src_path: Optional[str] = None, user_id: Optional[str] =
 
 def stats(clip: dict, post: dict, user_id: Optional[str] = None) -> dict:
     refresh_token = _refresh_token_for_user(user_id)
-    video_id = post.get("postId")
+    video_id = post.get("postId") or post.get("id")
     views = int(post.get("views") or 0)
 
     if video_id and refresh_token and not str(video_id).startswith("yt_"):
@@ -127,7 +127,7 @@ def stats(clip: dict, post: dict, user_id: Optional[str] = None) -> dict:
         except (HttpError, RuntimeError, ValueError, KeyError):
             views = int(post.get("views") or 0)
 
-    if not views:
+    if not views and (not video_id or str(video_id).startswith("yt_")):
         views = max(800, int((clip.get("end", 0) - clip.get("start", 0)) * 320))
 
     if views >= ANALYTICS_MEDIAN * 1.35:

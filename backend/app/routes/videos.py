@@ -1,10 +1,11 @@
 """Video upload + fetch routes."""
 
+import glob
 import mimetypes
 import os
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import storage
@@ -26,6 +27,46 @@ def _status(video_id: str, stage: str, message: str, **extra) -> None:
         },
     )
 
+
+def _safe_upload_name(filename: str | None) -> str:
+    base = os.path.basename(filename or "take.mp4")
+    _, ext = os.path.splitext(base)
+    return ext or ".mp4"
+
+
+def _save_video_record(
+    *,
+    background_tasks: BackgroundTasks,
+    src_path: str,
+    filename: str | None,
+    user_id: Optional[str],
+) -> Video:
+    duration = ffmpeg.probe_duration(src_path)
+    video = Video(
+        id=storage.new_id("vid"),
+        name=filename or "take.mp4",
+        duration=duration,
+        created_at=storage.now_ms(),
+    )
+    record = video.model_dump(by_alias=True)
+    record["srcPath"] = src_path
+    record["userId"] = user_id
+    storage.save_video(record)
+    _status(video.id, "uploaded", "Upload complete. Preparing analysis.")
+
+    storage.save_message(
+        {
+            "id": storage.new_id("msg"),
+            "role": "mind",
+            "text": "I am preparing the video, reading the audio, and looking for beats that stand alone.",
+            "createdAt": storage.now_ms(),
+            "videoId": video.id,
+            "userId": user_id,
+        }
+    )
+
+    background_tasks.add_task(_propose_moments, video.id, src_path, duration)
+    return video
 
 def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
     """Background analysis pipeline. Never raises."""
@@ -68,38 +109,109 @@ def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
 
 @router.post("", response_model=Video)
 async def upload_video(
-    file: UploadFile,
     background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Video:
     src_path = storage.save_upload(file)
-    duration = ffmpeg.probe_duration(src_path)
-
-    video = Video(
-        id=storage.new_id("vid"),
-        name=file.filename or "take.mp4",
-        duration=duration,
-        created_at=storage.now_ms(),
-    )
-    record = video.model_dump(by_alias=True)
-    record["srcPath"] = src_path
-    record["userId"] = user_id
-    storage.save_video(record)
-    _status(video.id, "uploaded", "Upload complete. Preparing analysis.")
-
-    storage.save_message(
-        {
-            "id": storage.new_id("msg"),
-            "role": "mind",
-            "text": "I am preparing the video, reading the audio, and looking for beats that stand alone.",
-            "createdAt": storage.now_ms(),
-            "videoId": video.id,
-            "userId": user_id,
-        }
+    return _save_video_record(
+        background_tasks=background_tasks,
+        src_path=src_path,
+        filename=file.filename,
+        user_id=user_id,
     )
 
-    background_tasks.add_task(_propose_moments, video.id, src_path, duration)
-    return video
+
+@router.post("/chunked/start")
+async def start_chunked_upload(
+    filename: Optional[str] = None,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> dict:
+    storage.ensure_dirs()
+    ext = _safe_upload_name(filename)
+    upload_id = storage.new_id("upload")
+    part_path = os.path.join(storage.UPLOAD_DIR, f"{upload_id}{ext}.part")
+    with open(part_path, "wb"):
+        pass
+    return {"uploadId": upload_id}
+
+
+@router.post("/chunked/{upload_id}/chunk")
+async def append_upload_chunk(
+    upload_id: str,
+    request: Request,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> dict:
+    storage.ensure_dirs()
+    matches = glob.glob(os.path.join(storage.UPLOAD_DIR, f"{upload_id}.*.part"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="Upload session not found.")
+    part_path = matches[0]
+    chunk = await request.body()
+    if not chunk:
+        raise HTTPException(status_code=400, detail="Upload chunk was empty.")
+    with open(part_path, "ab") as out:
+        out.write(chunk)
+    return {"ok": True, "size": os.path.getsize(part_path)}
+
+
+@router.post("/chunked/{upload_id}/finish", response_model=Video)
+async def finish_chunked_upload(
+    upload_id: str,
+    background_tasks: BackgroundTasks,
+    filename: Optional[str] = None,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> Video:
+    matches = glob.glob(os.path.join(storage.UPLOAD_DIR, f"{upload_id}.*.part"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="Upload session not found.")
+    part_path = matches[0]
+    if os.path.getsize(part_path) <= 0:
+        os.remove(part_path)
+        raise HTTPException(status_code=400, detail="Upload body was empty.")
+    final_path = part_path[:-5]
+    os.replace(part_path, final_path)
+    return _save_video_record(
+        background_tasks=background_tasks,
+        src_path=final_path,
+        filename=filename,
+        user_id=user_id,
+    )
+
+@router.post("/raw", response_model=Video)
+async def upload_video_raw(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    filename: Optional[str] = None,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> Video:
+    storage.ensure_dirs()
+    ext = _safe_upload_name(filename or request.headers.get("x-file-name"))
+    src_path = os.path.join(storage.UPLOAD_DIR, f"{storage.new_id('src')}{ext}")
+    wrote = 0
+    try:
+        with open(src_path, "wb") as out:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                wrote += len(chunk)
+                out.write(chunk)
+    except Exception as exc:
+        if os.path.exists(src_path):
+            os.remove(src_path)
+        raise HTTPException(status_code=400, detail="Could not receive upload body.") from exc
+
+    if wrote <= 0:
+        if os.path.exists(src_path):
+            os.remove(src_path)
+        raise HTTPException(status_code=400, detail="Upload body was empty.")
+
+    return _save_video_record(
+        background_tasks=background_tasks,
+        src_path=src_path,
+        filename=filename or request.headers.get("x-file-name"),
+        user_id=user_id,
+    )
 
 
 @router.post("/{video_id}/analysis/retry", response_model=AnalysisStatus)

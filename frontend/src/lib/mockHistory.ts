@@ -69,9 +69,30 @@ export function buildHistory(
   projects: Project[] = loadProjects(),
   overrides: HistoryOverrides = emptyOverrides,
 ): HistoryItem[] {
-  const drafts: HistoryItem[] = projects
-    .filter((project) => project.status === "draft")
-    .map((project) => ({
+  const rows: HistoryItem[] = projects.map((project) => {
+    const isVerifiedPosted =
+      Boolean(project.url) ||
+      project.verdict !== undefined ||
+      project.status === "checked" ||
+      (project.status === "posted" && project.views !== undefined);
+
+    if (isVerifiedPosted) {
+      return {
+        id: project.id,
+        title: project.name,
+        source: `${project.clips} clips cut`,
+        category: "posted",
+        status: project.verdict ?? "posted",
+        updatedAt: project.updatedAt,
+        median: ANALYTICS_MEDIAN,
+        views: project.views,
+        verdict: project.verdict,
+        url: project.url,
+        clips: project.clips,
+      };
+    }
+
+    return {
       id: project.id,
       title: project.name,
       source: `${project.clips} clips cut`,
@@ -80,31 +101,10 @@ export function buildHistory(
       updatedAt: project.updatedAt,
       median: ANALYTICS_MEDIAN,
       clips: project.clips,
-    }));
+    };
+  });
 
-  const realPosted: HistoryItem[] = projects
-    .filter(
-      (project) =>
-        project.status === "posted" ||
-        project.status === "checked" ||
-        project.verdict !== undefined ||
-        project.url !== undefined,
-    )
-    .map((project) => ({
-      id: project.id,
-      title: project.name,
-      source: `${project.clips} clips cut`,
-      category: "posted",
-      status: project.verdict ?? "posted",
-      updatedAt: project.updatedAt,
-      median: ANALYTICS_MEDIAN,
-      views: project.views,
-      verdict: project.verdict,
-      url: project.url,
-      clips: project.clips,
-    }));
-
-  return [...realPosted, ...drafts]
+  return rows
     .filter((item) => !overrides.hidden.includes(item.id))
     .map((item) =>
       overrides.renamed[item.id]

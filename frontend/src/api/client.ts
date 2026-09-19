@@ -61,15 +61,46 @@ async function handleResponse<T>(res: Response): Promise<T> {
 
 /** Upload a video file to kick off duration probe + background moment detection. */
 export async function uploadVideo(file: File): Promise<Video> {
-  const form = new FormData();
-  form.append("file", file);
-
-  const res = await fetch(`${BACKEND}/api/videos`, {
+  const filename = file.name || "take.mp4";
+  const qs = new URLSearchParams({ filename });
+  const start = await fetch(`${BACKEND}/api/videos/chunked/start?${qs.toString()}`, {
     method: "POST",
     headers: userHeaders(),
-    body: form,
   });
-  return handleResponse<Video>(res);
+  const { uploadId } = await handleResponse<{ uploadId: string }>(start);
+
+  const chunkSize = 4 * 1024 * 1024;
+  let index = 0;
+  for (let offset = 0; offset < file.size; offset += chunkSize) {
+    const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
+    const res = await fetch(
+      `${BACKEND}/api/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          ...userHeaders(),
+        },
+        body: chunk,
+      }
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(
+        `Upload chunk ${index + 1} failed (${res.status})${text ? `: ${text}` : ""}`
+      );
+    }
+    index += 1;
+  }
+
+  const finish = await fetch(
+    `${BACKEND}/api/videos/chunked/${encodeURIComponent(uploadId)}/finish?${qs.toString()}`,
+    {
+      method: "POST",
+      headers: userHeaders(),
+    }
+  );
+  return handleResponse<Video>(finish);
 }
 
 /** Retrieve video metadata by id. */

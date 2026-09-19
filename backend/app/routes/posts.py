@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 
 try:
     from googleapiclient.errors import HttpError
@@ -11,7 +12,9 @@ except ImportError:  # optional dependency guard
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import storage
+from ..db import SessionLocal
 from ..dependencies import get_user_id
+from ..models.user import PostAnalytics, Project
 from ..models.schemas import PostCheck, PublishResult
 from ..services import analytics, ffmpeg, playbook, youtube
 
@@ -57,6 +60,85 @@ def _youtube_error_message(exc: Exception) -> str:
     return "YouTube upload failed. Check channel permissions, quota, or video policy status."
 
 
+def _safe_verdict(value: str | None) -> str:
+    return value if value in {"hit", "mid", "flop"} else "mid"
+
+
+def _upsert_post_analytics(
+    *,
+    user_id: str | None,
+    clip: dict,
+    post_id: str,
+    post_url: str | None,
+    views: int = 0,
+    verdict: str = "mid",
+    note: str | None = None,
+) -> None:
+    with SessionLocal() as db:
+        query = db.query(PostAnalytics).filter(PostAnalytics.post_id == post_id)
+        if user_id:
+            query = query.filter(PostAnalytics.user_id == user_id)
+        existing = query.first()
+        title = clip.get("title") or "Untitled cut"
+        hook = clip.get("title") or clip.get("caption") or "Cut from take"
+        if existing:
+            existing.title = title
+            existing.hook = hook
+            existing.views = views
+            existing.verdict = _safe_verdict(verdict)
+            existing.post_url = post_url
+            existing.note = note
+        else:
+            db.add(
+                PostAnalytics(
+                    id=PostAnalytics.new_id(),
+                    user_id=user_id,
+                    video_id=clip.get("videoId"),
+                    clip_id=clip.get("id"),
+                    post_id=post_id,
+                    title=title,
+                    hook=hook,
+                    views=views,
+                    verdict=_safe_verdict(verdict),
+                    day="Recent",
+                    post_url=post_url,
+                    note=note,
+                    created_at=int(time.time() * 1000),
+                )
+            )
+        db.commit()
+
+
+def _update_project_from_post(
+    *,
+    user_id: str | None,
+    clip: dict,
+    post_id: str,
+    post_url: str | None,
+    views: int | None = None,
+    verdict: str | None = None,
+) -> None:
+    video_id = clip.get("videoId")
+    if not video_id:
+        return
+    with SessionLocal() as db:
+        query = db.query(Project).filter(Project.video_id == video_id)
+        if user_id:
+            query = query.filter(Project.user_id == user_id)
+        project = query.order_by(Project.updated_at.desc()).first()
+        if not project:
+            return
+        project.status = "checked" if verdict else "posted"
+        project.post_id = post_id
+        project.post_url = post_url
+        if views is not None:
+            project.views = views
+        if verdict in {"hit", "mid", "flop"}:
+            project.verdict = verdict
+        project.updated_at = int(time.time() * 1000)
+        db.commit()
+
+
 @router.post("/{clip_id}", response_model=PublishResult)
 async def publish_clip(
     clip_id: str,
@@ -83,17 +165,33 @@ async def publish_clip(
     except HttpError as exc:
         raise HTTPException(status_code=502, detail=_youtube_error_message(exc)) from exc
 
-    storage.update_clip(
+    posted_clip = storage.update_clip(
         clip_id,
         {"posted": True, "postId": result["postId"], "postUrl": result["postUrl"]},
-    )
+    ) or {**clip, "id": clip_id}
     storage.save_post(
         {
             "id": result["postId"],
             "clipId": clip_id,
             "videoId": clip["videoId"],
             "userId": user_id,
+            "postUrl": result["postUrl"],
+            "views": 0,
+            "verdict": "mid",
+            "createdAt": storage.now_ms(),
         }
+    )
+    _upsert_post_analytics(
+        user_id=user_id,
+        clip=posted_clip,
+        post_id=result["postId"],
+        post_url=result["postUrl"],
+    )
+    _update_project_from_post(
+        user_id=user_id,
+        clip=posted_clip,
+        post_id=result["postId"],
+        post_url=result["postUrl"],
     )
     return PublishResult(post_id=result["postId"], post_url=result["postUrl"])
 
@@ -112,8 +210,36 @@ async def check_post(
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
 
-    views = youtube.stats(clip, post, user_id=user_id)
+    stats = youtube.stats(clip, post, user_id=user_id)
+    views = int(stats.get("views", 0) if isinstance(stats, dict) else stats)
     check = analytics.build_post_check(clip, post_id, views)
+    post_url = post.get("postUrl") or clip.get("postUrl")
+    storage.update_post(
+        post_id,
+        {
+            "views": check["views"],
+            "verdict": check["verdict"],
+            "postUrl": post_url,
+            "checkedAt": storage.now_ms(),
+        },
+    )
+    _upsert_post_analytics(
+        user_id=user_id,
+        clip=clip,
+        post_id=post_id,
+        post_url=post_url,
+        views=check["views"],
+        verdict=check["verdict"],
+        note=check["note"],
+    )
+    _update_project_from_post(
+        user_id=user_id,
+        clip=clip,
+        post_id=post_id,
+        post_url=post_url,
+        views=check["views"],
+        verdict=check["verdict"],
+    )
 
     moment = storage.get_moment(clip.get("momentId", ""))
     if moment:
