@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..dependencies import get_user_id
 from ..models.schemas import Clip, Moment, MomentDecision
 from .. import storage
-from ..services import captions, ffmpeg, minds, playbook
+from ..services import captions, minds, playbook
 
 router = APIRouter()
 
@@ -93,7 +93,6 @@ def _build_clip(moment: dict, user_id: Optional[str] = None) -> None:
     record["userId"] = user_id
     storage.save_clip(record)
 
-    video = storage.get_video(video_id)
-    src_path = video.get("srcPath") if video else None
-    if src_path:
-        ffmpeg.render_clip(src_path, clip.start, clip.end)  # best-effort
+    # Rendering is intentionally deferred until export/publish/file download.
+    # Moment acceptance must stay fast so chat actions can create several cuts
+    # without blocking on ffmpeg for each one.

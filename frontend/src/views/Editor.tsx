@@ -291,6 +291,7 @@ export default function Editor() {
   const [prompt, setPrompt] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [regeneratingMoments, setRegeneratingMoments] = useState(false);
+  const [actionProgress, setActionProgress] = useState<{ label: string; percent: number } | null>(null);
   const [stamp, setStamp] = useState("");
 
   // Clip editing: a one-slot clipboard for copy/cut/paste and a linear
@@ -759,6 +760,7 @@ export default function Editor() {
       if (foundMoments.length > 0) {
         const mode = await resolvePermissionMode();
         if (mode === "auto") {
+          setActionProgress({ label: "Creating cuts from regenerated moments", percent: 72 });
           await autoApproveMoments(foundMoments);
         } else {
           pushMind(
@@ -2112,6 +2114,7 @@ export default function Editor() {
     try {
       const started = await api.retryAnalysis(video.id);
       setAnalysisStatus(started);
+      setActionProgress({ label: "Watching for detected moments", percent: 35 });
       const { foundMoments, latestStatus } = await pollMomentAnalysis(video.id);
       setMoments(foundMoments);
 
@@ -2123,6 +2126,7 @@ export default function Editor() {
               foundMoments.length === 1 ? "" : "s"
             } and replaced the old set.`,
           );
+          setActionProgress({ label: "Creating cuts from regenerated moments", percent: 72 });
           await autoApproveMoments(foundMoments);
         } else {
           pushMind(
@@ -2186,30 +2190,65 @@ export default function Editor() {
       let workingMoments = moments;
       let workingClips = clips;
 
+      if (video?.id) {
+        const [freshMoments, freshClips, status] = await Promise.all([
+          api.listMoments(video.id).catch(() => workingMoments),
+          api.listClips(video.id).catch(() => workingClips),
+          api.getAnalysisStatus(video.id).catch(() => null),
+        ]);
+        workingMoments = freshMoments;
+        workingClips = freshClips;
+        setMoments(workingMoments);
+        setClips(workingClips);
+        serverClipIds.current = new Set(workingClips.map((clip) => clip.id));
+        if (status) setAnalysisStatus(status);
+      }
+
       if (video?.id && workingMoments.length === 0) {
+        setActionProgress({ label: "Finding standout moments", percent: 22 });
         pushMind("Finding the strongest moments in this take now...");
         const started = await api.retryAnalysis(video.id);
         setAnalysisStatus(started);
+        setActionProgress({ label: "Waiting for moment detection", percent: 36 });
         const result = await pollMomentAnalysis(video.id);
         workingMoments = result.foundMoments;
         setMoments(workingMoments);
       }
 
-      const pending = workingMoments.filter((moment) => moment.status === "pending").slice(0, 3);
-      if (pending.length > 0) {
-        pushMind(`Loading ${pending.length} best moment${pending.length === 1 ? "" : "s"} into the timeline now.`);
+      const existingMomentIds = new Set(workingClips.map((clip) => clip.momentId));
+      const missingAccepted = workingMoments.filter(
+        (moment) => moment.status === "accepted" && !existingMomentIds.has(moment.id),
+      );
+      const pending = workingMoments.filter((moment) => moment.status === "pending");
+      const toAccept = [...missingAccepted, ...pending].slice(0, 3);
+
+      if (toAccept.length > 0) {
+        setActionProgress({ label: `Preparing ${toAccept.length} moment${toAccept.length === 1 ? "" : "s"}`, percent: 48 });
+        pushMind(`Loading ${toAccept.length} best moment${toAccept.length === 1 ? "" : "s"} into the timeline now.`);
         const accepted: Moment[] = [];
-        for (const moment of pending) {
-          const updated = await api.decideMoment(moment.id, "accept");
-          accepted.push(updated);
+        for (const moment of toAccept) {
+          try {
+            const updated = await api.decideMoment(moment.id, "accept");
+            accepted.push(updated);
+          } catch (err: any) {
+            pushMind(`Could not create a cut for "${moment.label}": ${err.message || err}`);
+            continue;
+          }
+          if (video?.id) {
+            workingClips = await api.listClips(video.id).catch(() => workingClips);
+            setClips(workingClips);
+            serverClipIds.current = new Set(workingClips.map((clip) => clip.id));
+          }
         }
-        setMoments((prev) =>
-          prev.map((moment) => accepted.find((item) => item.id === moment.id) ?? moment),
-        );
+        if (accepted.length > 0) {
+          setMoments((prev) =>
+            prev.map((moment) => accepted.find((item) => item.id === moment.id) ?? moment),
+          );
+        }
       }
 
       if (video?.id) {
-        workingClips = await api.listClips(video.id);
+        workingClips = await api.listClips(video.id).catch(() => workingClips);
         setClips(workingClips);
         serverClipIds.current = new Set(workingClips.map((clip) => clip.id));
       }
@@ -2221,13 +2260,14 @@ export default function Editor() {
         null;
 
       if (!bestClip) {
-        pushMind("I could not create a cut yet. Try /redo to rerun moment detection, or use /cut 0:12 to 0:25.");
+        pushMind("No cuts are ready yet. If moments are still analyzing, wait for the status to finish, then use /cuts again.");
         return;
       }
 
       setSelectedClipId(bestClip.id);
 
       if (opts.captions || opts.publish) {
+        setActionProgress({ label: "Adding captions", percent: 84 });
         await generateCaptionTrackForRange({
           clipId: bestClip.id,
           title: bestClip.title,
@@ -2239,12 +2279,13 @@ export default function Editor() {
       }
 
       if (opts.publish) {
+        setActionProgress({ label: "Publishing to YouTube", percent: 92 });
         await shipToYouTube(bestClip);
       } else {
         pushMind(
           opts.captions
             ? `Created the best cut and added captions for "${bestClip.title}".`
-            : `Created the best cut: "${bestClip.title}".`,
+            : `Created ${workingClips.length} cut${workingClips.length === 1 ? "" : "s"}. Best cut selected: "${bestClip.title}".`,
         );
       }
     } catch (err: any) {
@@ -2274,6 +2315,7 @@ export default function Editor() {
     setBusy(true);
     try {
       const title = `Cut ${formatTime(start)}-${formatTime(end)}`;
+      setActionProgress({ label: `Creating ${title}`, percent: 55 });
       const created = await api.createClip({
         videoId: video.id,
         start,
@@ -2285,6 +2327,7 @@ export default function Editor() {
       commit([...clips, created]);
       setSelectedClipId(created.id);
       setTool("cuts");
+      setActionProgress({ label: "Cut created", percent: 100 });
       pushMind(`Created "${created.title}" from ${formatTime(start)} to ${formatTime(end)}.`);
     } catch (err: any) {
       pushMind(`Could not create that cut: ${err.message || err}`);
@@ -2668,6 +2711,7 @@ export default function Editor() {
         messages={messages}
         chatBusy={chatBusy}
         regeneratingMoments={regeneratingMoments}
+        actionProgress={actionProgress}
         selectedClipId={selectedClipId}
         captionTracks={captionTracks}
         fontChoices={fontChoices}

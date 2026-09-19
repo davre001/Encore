@@ -270,7 +270,7 @@ export async function generateCaptionTrack(input: {
 export async function postClip(
   clipId: string
 ): Promise<{ postId: string; postUrl: string }> {
-  const res = await fetch(`${API}/posts/${encodeURIComponent(clipId)}`, {
+  const res = await fetch(`${BACKEND}/api/posts/${encodeURIComponent(clipId)}`, {
     method: "POST",
     headers: userHeaders(),
   });
@@ -280,7 +280,7 @@ export async function postClip(
 /** Check view count and verdict for a published post. */
 export async function checkPost(postId: string): Promise<PostCheck> {
   const res = await fetch(
-    `${API}/posts/${encodeURIComponent(postId)}/check`,
+    `${BACKEND}/api/posts/${encodeURIComponent(postId)}/check`,
     { headers: userHeaders() }
   );
   return handleResponse<PostCheck>(res);

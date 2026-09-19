@@ -24,6 +24,7 @@ type ToolPanelProps = {
   messages: Message[];
   chatBusy: boolean;
   regeneratingMoments: boolean;
+  actionProgress: { label: string; percent: number } | null;
   selectedClipId: string | null;
   captionTracks: CaptionTrack[];
   fontChoices: string[];
@@ -612,7 +613,17 @@ export default function ToolPanel(props: ToolPanelProps) {
                   Thinking...
                 </p>
               ) : null}
-              {props.regeneratingMoments && props.analysisStatus ? (
+              {props.actionProgress ? (
+                <div className="cut__chat-progress" aria-live="polite">
+                  <div className="cut__chat-progress-top">
+                    <span>{props.actionProgress.label}</span>
+                    <b>{props.actionProgress.percent}%</b>
+                  </div>
+                  <span className="cut__chat-progress-track">
+                    <i style={{ width: `${props.actionProgress.percent}%` }} />
+                  </span>
+                </div>
+              ) : props.regeneratingMoments && props.analysisStatus ? (
                 <div className="cut__chat-progress" aria-live="polite">
                   <div className="cut__chat-progress-top">
                     <span>{props.analysisStatus.message}</span>
