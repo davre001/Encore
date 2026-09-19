@@ -1,19 +1,60 @@
-"""Posts — publish a clip to YouTube and grade it later.
+"""Posts - publish a rendered clip to YouTube and grade it later."""
 
-Publish marks the clip posted and records the post (real upload when creds are
-present, simulated id/URL otherwise). Check reads the live view count (or the
-deterministic stand-in), grades it hit/mid/flop against the creator's median,
-and folds the verdict back into the playbook via the originating moment.
-"""
+import json
+import os
+
+try:
+    from googleapiclient.errors import HttpError
+except ImportError:  # optional dependency guard
+    HttpError = Exception
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from .. import storage
 from ..dependencies import get_user_id
 from ..models.schemas import PostCheck, PublishResult
-from .. import storage
-from ..services import analytics, playbook, youtube
+from ..services import analytics, ffmpeg, playbook, youtube
 
 router = APIRouter()
+
+
+def _upload_path_for_clip(clip: dict) -> str | None:
+    render_path = clip.get("renderPath")
+    if render_path and os.path.isfile(render_path):
+        return render_path
+
+    video = storage.get_video(clip["videoId"])
+    src_path = video.get("srcPath") if video else None
+    if not src_path:
+        return None
+
+    rendered = ffmpeg.render_clip(src_path, clip["start"], clip["end"])
+    if rendered:
+        storage.update_clip(clip["id"], {"renderPath": rendered})
+    return rendered
+
+
+def _youtube_error_message(exc: Exception) -> str:
+    content = getattr(exc, "content", None)
+    if isinstance(content, bytes):
+        content = content.decode("utf-8", errors="replace")
+    if isinstance(content, str) and content:
+        try:
+            payload = json.loads(content)
+            error = payload.get("error", {})
+            message = error.get("message")
+            details = error.get("errors") or []
+            reason = details[0].get("reason") if details and isinstance(details[0], dict) else None
+            if message and reason:
+                return f"YouTube upload failed: {message} ({reason})."
+            if message:
+                return f"YouTube upload failed: {message}."
+        except json.JSONDecodeError:
+            return f"YouTube upload failed: {content[:300]}"
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    if status:
+        return f"YouTube upload failed with status {status}."
+    return "YouTube upload failed. Check channel permissions, quota, or video policy status."
 
 
 @router.post("/{clip_id}", response_model=PublishResult)
@@ -32,9 +73,15 @@ async def publish_clip(
             detail="Connect a YouTube channel in Settings before posting.",
         )
 
-    video = storage.get_video(clip["videoId"])
-    src_path = video.get("srcPath") if video else None
-    result = youtube.publish(clip, src_path, user_id=user_id)
+    upload_path = _upload_path_for_clip(clip)
+    try:
+        result = youtube.publish(clip, upload_path, user_id=user_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except HttpError as exc:
+        raise HTTPException(status_code=502, detail=_youtube_error_message(exc)) from exc
 
     storage.update_clip(
         clip_id,

@@ -1859,10 +1859,15 @@ export default function Editor() {
       setProjectStatus("posted");
       setProjectPostUrl(postUrl);
       setProjectPostId(postId);
-      pushMind(
-        `Posted “${clip.title}” to YouTube (${postUrl}). Checking views against your median…`,
-      );
+      const postedMessage = `Posted "${clip.title}" to YouTube (${postUrl}). Opening it now.`;
+      pushMind(postedMessage, false);
+      if (video?.id || projectId) {
+        await api.saveEditorEvent(video?.id || projectId || "notebook", postedMessage).catch(() => null);
+      }
 
+      if (typeof window !== "undefined") {
+        window.location.assign(postUrl);
+      }
       await sleep(1800);
       const check = await api.checkPost(postId);
       setChecks((prev) => [check, ...prev]);

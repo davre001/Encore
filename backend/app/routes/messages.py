@@ -54,7 +54,7 @@ async def send_message(
     )
     storage.save_message({**user_msg, "userId": user_id})
 
-    latest = _latest_check(body.video_id)
+    latest = _latest_check(body.video_id, user_id)
     context_parts = [_editor_context(body.video_id, user_id)]
     if latest:
         context_parts.append(f"Latest post check: {latest['verdict']} at {latest['views']:,} views.")
@@ -177,7 +177,7 @@ def _editor_context(video_id: str, user_id: Optional[str]) -> str:
     return "\n".join(lines)
 
 
-def _latest_check(video_id: str) -> Optional[dict]:
+def _latest_check(video_id: str, user_id: Optional[str] = None) -> Optional[dict]:
     posts = storage.list_posts(video_id)
     if not posts:
         return None
@@ -185,5 +185,7 @@ def _latest_check(video_id: str) -> Optional[dict]:
     clip = storage.get_clip(post["clipId"])
     if clip is None:
         return None
-    views = youtube.stats(clip, post)
-    return {"verdict": analytics.grade(views), "views": views}
+    stats = youtube.stats(clip, post, user_id=user_id)
+    views = int(stats.get("views") or 0)
+    verdict = str(stats.get("verdict") or analytics.grade(views))
+    return {"verdict": verdict, "views": views}
