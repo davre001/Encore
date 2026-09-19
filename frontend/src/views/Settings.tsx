@@ -7,7 +7,7 @@ import { Stagger, StaggerItem } from "@/components/motion/Stagger";
 import { DUR, EASE } from "@/lib/motion";
 import { useAuth } from "@/context/AuthContext";
 import * as api from "@/api/client";
-import type { MindTransport, PlaybookRow } from "@/types";
+import type { MindTransport, PlaybookRow, YouTubeStatus } from "@/types";
 import {
   defaultSettings,
   loadSettings,
@@ -50,6 +50,8 @@ export default function Settings() {
   } | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [youtubeStatus, setYoutubeStatus] = useState<YouTubeStatus | null>(null);
+  const [youtubeBusy, setYoutubeBusy] = useState(false);
 
   useEffect(() => {
     const local = loadSettings();
@@ -93,21 +95,30 @@ export default function Settings() {
       })
       .catch(() => {});
 
-    // 4. Check YouTube service status
+    // 4. Check YouTube connection status
     api
-      .getHealth()
-      .then((health) => {
-        if (health && health.capabilities) {
-          const ytOk = Boolean(health.capabilities.youtube);
+      .getYouTubeStatus()
+      .then((status) => {
+        setYoutubeStatus(status);
           setSettings((prev) => ({
             ...prev,
-            youtubeConnected: ytOk || prev.youtubeConnected,
-            youtubeChannel: user?.handle || (user?.name ? `@${user.name.toLowerCase().replace(/\s+/g, "")}` : prev.youtubeChannel),
+            youtubeConnected: status.connected,
+            youtubeChannel: status.channelTitle || prev.youtubeChannel,
           }));
-        }
       })
       .catch(() => {});
   }, [user]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("youtube")) return;
+    void refreshYouTubeStatus().finally(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("youtube");
+      window.history.replaceState({}, "", url.toString());
+    });
+  }, []);
 
   function update(partial: Partial<SettingsState>) {
     setSettings((prev) => ({ ...prev, ...partial }));
@@ -159,9 +170,44 @@ export default function Settings() {
     }
   }
 
+  async function refreshYouTubeStatus() {
+    const status = await api.getYouTubeStatus();
+    setYoutubeStatus(status);
+    update({
+      youtubeConnected: status.connected,
+      youtubeChannel: status.channelTitle || "",
+    });
+  }
+
+  async function handleConnectYouTube() {
+    setYoutubeBusy(true);
+    try {
+      const { authUrl } = await api.connectYouTube();
+      window.location.href = authUrl;
+    } catch (err) {
+      console.warn("Failed to start YouTube OAuth:", err);
+      setYoutubeBusy(false);
+    }
+  }
+
+  async function handleDisconnectYouTube() {
+    setYoutubeBusy(true);
+    try {
+      const status = await api.disconnectYouTube();
+      setYoutubeStatus(status);
+      update({ youtubeConnected: false, youtubeChannel: "" });
+    } catch (err) {
+      console.warn("Failed to disconnect YouTube:", err);
+    } finally {
+      setYoutubeBusy(false);
+    }
+  }
+
   const channelLabel =
+    youtubeStatus?.channelTitle ||
+    settings.youtubeChannel ||
     user?.handle ||
-    (user?.name ? `@${user.name.toLowerCase().replace(/\s+/g, "")}` : settings.youtubeChannel || "No channel");
+    "No channel";
 
   // Minds wiring, told honestly: a key that is set but rejected must not read
   // as "connected", because the notebook silently answers from the fallback.
@@ -341,13 +387,28 @@ export default function Settings() {
             <button
               type="button"
               className={`btn btn--small ${settings.youtubeConnected ? "btn--danger" : "btn--primary"}`}
-              onClick={() =>
-                update({ youtubeConnected: !settings.youtubeConnected })
+              disabled={youtubeBusy || (!settings.youtubeConnected && !youtubeStatus?.oauthReady)}
+              onClick={
+                settings.youtubeConnected
+                  ? handleDisconnectYouTube
+                  : handleConnectYouTube
               }
             >
-              {settings.youtubeConnected ? "Disconnect" : "Connect"}
+              {youtubeBusy
+                ? "Opening..."
+                : settings.youtubeConnected
+                  ? "Disconnect"
+                  : youtubeStatus?.oauthReady
+                    ? "Connect"
+                    : "Setup required"}
             </button>
           </div>
+          {!youtubeStatus?.oauthReady ? (
+            <p className="panel__empty" style={{ marginTop: "0.75rem" }}>
+              Set YouTube OAuth credentials in the backend, then add this redirect
+              URI in Google Cloud: http://127.0.0.1:5000/api/youtube/callback
+            </p>
+          ) : null}
         </StaggerItem>
 
         <StaggerItem as="section" className="panel">

@@ -35,6 +35,11 @@ MINDS_REPLY_TIMEOUT = float(os.getenv("MINDS_REPLY_TIMEOUT", "120"))
 YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET", "")
 YOUTUBE_REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN", "")
+YOUTUBE_REDIRECT_URI = os.getenv(
+    "YOUTUBE_REDIRECT_URI",
+    "http://127.0.0.1:5000/api/youtube/callback",
+).strip()
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL_TEXT = os.getenv("GEMINI_MODEL_TEXT", "gemini-3.5-flash-lite").strip()
 GEMINI_MODEL_VIDEO = os.getenv("GEMINI_MODEL_VIDEO", "gemini-3.5-flash-lite").strip()

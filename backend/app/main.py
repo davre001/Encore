@@ -31,6 +31,7 @@ from .routes import (
     projects,
     settings,
     videos,
+    youtube,
 )
 
 
@@ -87,5 +88,6 @@ app.include_router(posts.router, prefix="/api/posts", tags=["posts"])
 app.include_router(messages.router, prefix="/api/messages", tags=["messages"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
+app.include_router(youtube.router, prefix="/api/youtube", tags=["youtube"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(mind.router, prefix="/api/mind", tags=["mind"])

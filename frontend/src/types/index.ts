@@ -52,6 +52,15 @@ export type AiSettings = {
   updatedAt: number;
 };
 
+export type YouTubeStatus = {
+  connected: boolean;
+  oauthReady: boolean;
+  channelId?: string | null;
+  channelTitle?: string | null;
+  channelUrl?: string | null;
+  updatedAt?: number | null;
+};
+
 export type Clip = {
   id: string;
   momentId: string;

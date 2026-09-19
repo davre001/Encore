@@ -49,7 +49,7 @@ async def decide_moment(
     playbook.record_decision(record.get("label", ""), body.decision)
 
     if accepted:
-        _build_clip(record)
+        _build_clip(record, user_id)
 
     event_text = (
         f"Kept moment \"{record.get('label', 'Moment')}\" and created a cut."
@@ -67,7 +67,7 @@ async def decide_moment(
     return Moment.model_validate(updated)
 
 
-def _build_clip(moment: dict) -> None:
+def _build_clip(moment: dict, user_id: Optional[str] = None) -> None:
     """Create the clip for an accepted moment, once."""
     video_id = moment["videoId"]
     already = [
@@ -89,7 +89,9 @@ def _build_clip(moment: dict) -> None:
         end=moment["end"],
         posted=False,
     )
-    storage.save_clip(clip.model_dump(by_alias=True))
+    record = clip.model_dump(by_alias=True)
+    record["userId"] = user_id
+    storage.save_clip(record)
 
     video = storage.get_video(video_id)
     src_path = video.get("srcPath") if video else None

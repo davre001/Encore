@@ -183,6 +183,64 @@ def save_ai_settings(user_id: Optional[str], patch: dict) -> dict:
     return record
 
 
+# --- YouTube OAuth ---------------------------------------------------------
+def save_youtube_state(state: str, user_id: str, expires_at: int) -> dict:
+    record = {
+        "id": state,
+        "state": state,
+        "userId": user_id,
+        "expiresAt": expires_at,
+        "createdAt": now_ms(),
+    }
+    with _LOCK:
+        rows = [r for r in _read("youtube_oauth_states") if r.get("state") != state]
+        rows.append(record)
+        _write("youtube_oauth_states", rows)
+    return record
+
+
+def pop_youtube_state(state: str) -> Optional[dict]:
+    with _LOCK:
+        rows = _read("youtube_oauth_states")
+        found = next((r for r in rows if r.get("state") == state), None)
+        _write(
+            "youtube_oauth_states",
+            [r for r in rows if r.get("state") != state],
+        )
+    if not found:
+        return None
+    if int(found.get("expiresAt", 0) or 0) < now_ms():
+        return None
+    return found
+
+
+def get_youtube_connection(user_id: Optional[str]) -> Optional[dict]:
+    if not user_id:
+        return None
+    rows = _list_by("youtube_connections", "userId", user_id)
+    return rows[-1] if rows else None
+
+
+def save_youtube_connection(user_id: str, record: dict) -> dict:
+    saved = {
+        "id": f"yt_{user_id}",
+        "userId": user_id,
+        "updatedAt": now_ms(),
+        **record,
+    }
+    with _LOCK:
+        rows = [r for r in _read("youtube_connections") if r.get("userId") != user_id]
+        rows.append(saved)
+        _write("youtube_connections", rows)
+    return saved
+
+
+def delete_youtube_connection(user_id: str) -> None:
+    with _LOCK:
+        rows = [r for r in _read("youtube_connections") if r.get("userId") != user_id]
+        _write("youtube_connections", rows)
+
+
 # --- analysis status -------------------------------------------------------
 def save_analysis_status(video_id: str, status: dict) -> dict:
     record = {

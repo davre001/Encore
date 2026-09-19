@@ -180,6 +180,19 @@ class PublishResult(CamelModel):
     post_url: str
 
 
+class YouTubeStatus(CamelModel):
+    connected: bool
+    oauth_ready: bool
+    channel_id: Optional[str] = None
+    channel_title: Optional[str] = None
+    channel_url: Optional[str] = None
+    updated_at: Optional[int] = None
+
+
+class YouTubeConnectResponse(CamelModel):
+    auth_url: str
+
+
 # --- Auth schemas ----------------------------------------------------------
 class UserSignUp(CamelModel):
     email: str

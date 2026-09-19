@@ -15,6 +15,7 @@ import type {
   PostCheck,
   ProjectState,
   Video,
+  YouTubeStatus,
 } from "../types";
 
 const API = "/api";
@@ -252,6 +253,29 @@ export async function checkPost(postId: string): Promise<PostCheck> {
     { headers: userHeaders() }
   );
   return handleResponse<PostCheck>(res);
+}
+
+export async function getYouTubeStatus(): Promise<YouTubeStatus> {
+  const res = await fetch(`${API}/youtube/status`, {
+    headers: userHeaders(),
+  });
+  return handleResponse<YouTubeStatus>(res);
+}
+
+export async function connectYouTube(): Promise<{ authUrl: string }> {
+  const res = await fetch(`${API}/youtube/connect`, {
+    method: "POST",
+    headers: userHeaders(),
+  });
+  return handleResponse<{ authUrl: string }>(res);
+}
+
+export async function disconnectYouTube(): Promise<YouTubeStatus> {
+  const res = await fetch(`${API}/youtube/disconnect`, {
+    method: "DELETE",
+    headers: userHeaders(),
+  });
+  return handleResponse<YouTubeStatus>(res);
 }
 
 /** List all notebook messages for a video. */
