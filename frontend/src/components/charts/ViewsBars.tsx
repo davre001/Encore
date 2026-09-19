@@ -56,7 +56,12 @@ export default function ViewsBars({ posts, median }: ViewsBarsProps) {
     );
   }
 
-  const series = posts.map((p) => ({ day: p.day, views: p.views }));
+  const series = posts.map((p, index) => ({
+    key: p.id ? `${p.id}-${index}` : `${p.day}-${index}`,
+    day: p.day,
+    views: p.views,
+    verdict: p.verdict,
+  }));
 
   const total = series.reduce((sum, point) => sum + point.views, 0);
   const top = niceMax(Math.max(...series.map((p) => p.views), median));
@@ -74,7 +79,7 @@ export default function ViewsBars({ posts, median }: ViewsBarsProps) {
       x: PAD.left + band * (index + 0.5) - barW / 2,
       y: baseY - barH,
       h: barH,
-      verdict: posts.find((p) => p.day === point.day)?.verdict,
+      verdict: point.verdict,
     };
   });
 
@@ -112,7 +117,7 @@ export default function ViewsBars({ posts, median }: ViewsBarsProps) {
 
       {bars.map((bar, index) => (
         <motion.rect
-          key={bar.day}
+          key={bar.key}
           x={bar.x}
           width={barW}
           rx={6}
@@ -142,7 +147,7 @@ export default function ViewsBars({ posts, median }: ViewsBarsProps) {
 
       {bars.map((bar) => (
         <text
-          key={`label-${bar.day}`}
+          key={`label-${bar.key}`}
           x={bar.x + barW / 2}
           y={H - 8}
           className="chart__tick"

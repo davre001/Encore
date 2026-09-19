@@ -14,7 +14,6 @@ from ..models.schemas import (
 )
 from ..models.user import PostAnalytics, PlaybookRule, Project
 from ..db import SessionLocal
-from ..services import playbook
 
 router = APIRouter()
 
@@ -106,21 +105,6 @@ async def get_analytics(
                         locked=bool(r.locked),
                     )
                 )
-        else:
-            # No DB rules yet: fall back to the JSON taste store. It is empty on
-            # a fresh account, and `sample`/`hitRate` default to zero so a style
-            # with no posts behind it never reads as a 50% hit rate.
-            service_rules = playbook.load_playbook()
-            for r in service_rules:
-                playbook_list.append(
-                    PlaybookRow(
-                        style=r.get("style", "Style"),
-                        sample=int(r.get("sample", 0)),
-                        hit_rate=float(r.get("hitRate", 0.0)),
-                        note=r.get("note", ""),
-                        locked=False,
-                    )
-                )
 
         return AnalyticsDataResponse(
             posts=posts,
@@ -152,17 +136,7 @@ async def list_playbook(
                 for r in rules
             ]
 
-    raw = playbook.load_playbook()
-    return [
-        PlaybookRow(
-            style=r.get("style", "Style"),
-            sample=int(r.get("sample", 0)),
-            hit_rate=float(r.get("hitRate", 0.0)),
-            note=r.get("note", ""),
-            locked=False,
-        )
-        for r in raw
-    ]
+    return []
 
 
 @router.post("/playbook", response_model=PlaybookRow)

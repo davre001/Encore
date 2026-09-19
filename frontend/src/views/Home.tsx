@@ -14,12 +14,7 @@ import { Stagger, StaggerItem } from "@/components/motion/Stagger";
 import { DUR, EASE, springSoft } from "@/lib/motion";
 import * as api from "@/api/client";
 import type { AnalyticsData } from "@/types";
-import {
-  formatWhen,
-  loadProjects,
-  saveProjects,
-  type Project,
-} from "@/lib/mockProjects";
+import { formatWhen, type Project } from "@/lib/mockProjects";
 
 function greeting(hour: number): string {
   if (hour < 5) return "Up late";
@@ -69,7 +64,7 @@ export default function Home() {
   const [menuId, setMenuId] = useState<string | null>(null);
 
   useEffect(() => {
-    setProjects(loadProjects());
+    setProjects([]);
     const tick = window.setInterval(() => setNow(new Date()), 60_000);
 
     api
@@ -85,11 +80,7 @@ export default function Home() {
             (bp.takeSegments?.length > 1 ? bp.takeSegments.length : 0),
           status: bp.status,
         }));
-        setProjects((prev) => {
-          const ids = new Set(mapped.map((m) => m.id));
-          const rest = prev.filter((p) => !ids.has(p.id));
-          return [...mapped, ...rest];
-        });
+        setProjects(mapped);
       })
       .catch(() => {});
 
@@ -116,7 +107,6 @@ export default function Home() {
 
   function persist(next: Project[]) {
     setProjects(next);
-    saveProjects(next);
   }
 
   const visible = showAll ? projects : projects.slice(0, PREVIEW);

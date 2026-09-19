@@ -107,7 +107,7 @@ def _merged_history(video_id: str, user_id: Optional[str]) -> list[dict]:
     out: list[dict] = []
     seen: set[tuple[str, str, int]] = set()
     for row in sorted(rows, key=lambda item: int(item.get("createdAt", 0) or 0)):
-        if user_id and row.get("userId") and row.get("userId") != user_id:
+        if user_id and row.get("userId") != user_id:
             continue
         key = (
             str(row.get("role", "")),

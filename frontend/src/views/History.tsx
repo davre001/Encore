@@ -12,7 +12,6 @@ import {
   Lightbulb,
   Minus,
   Play,
-  RotateCcw,
   TriangleAlert,
 } from "lucide-react";
 import Reveal from "@/components/motion/Reveal";
@@ -20,7 +19,7 @@ import { Stagger, StaggerItem } from "@/components/motion/Stagger";
 import { useReducedMotionSafe } from "@/components/motion/useReducedMotionSafe";
 import { DUR, EASE } from "@/lib/motion";
 import * as api from "@/api/client";
-import { formatWhen, loadProjects, saveProjects, type Project } from "@/lib/mockProjects";
+import { formatWhen, type Project } from "@/lib/mockProjects";
 import {
   CATEGORY_LABEL,
   SORT_LABEL,
@@ -78,8 +77,7 @@ export default function History() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    const local = loadProjects();
-    setProjects(local);
+    setProjects([]);
     setOverrides(loadOverrides());
     setLoaded(true);
 
@@ -96,14 +94,10 @@ export default function History() {
             (bp.takeSegments?.length > 1 ? bp.takeSegments.length : 0),
           status: bp.status,
           verdict: bp.verdict,
-          views: bp.views,
+          views: bp.views ?? undefined,
           url: bp.postUrl ?? undefined,
         }));
-        setProjects((prev) => {
-          const ids = new Set(mapped.map((m) => m.id));
-          const rest = prev.filter((p) => !ids.has(p.id));
-          return [...mapped, ...rest];
-        });
+        setProjects(mapped);
       })
       .catch(() => {});
   }, []);
@@ -137,7 +131,6 @@ export default function History() {
 
   function persistProjects(next: Project[]) {
     setProjects(next);
-    saveProjects(next);
   }
 
   function persistOverrides(next: HistoryOverrides) {
@@ -322,7 +315,7 @@ export default function History() {
                       ) : null}
                     </div>
 
-                    {item.views !== undefined ? (
+                    {item.views != null ? (
                       <div className="hist__views">
                         <strong>{item.views.toLocaleString()}</strong>
                         <span>views</span>
@@ -356,7 +349,7 @@ export default function History() {
                             )
                           }
                         >
-                          <RotateCcw /> Re-cut
+                          <Play /> Resume
                         </button>
                       )}
 
@@ -406,7 +399,7 @@ export default function History() {
                                   router.push(`/editor?project=${item.id}`);
                                 }}
                               >
-                                Re-edit
+                                Resume
                               </button>
                               <button
                                 type="button"
@@ -461,7 +454,7 @@ export default function History() {
                               ))}
                             </ul>
                             <Link href="/editor" className="btn btn--primary btn--small">
-                              <RotateCcw /> Queue a recut
+                              <Play /> Resume
                             </Link>
                           </section>
                         </div>

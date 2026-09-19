@@ -53,7 +53,12 @@ export default function Bars({ posts, median, className }: BarsProps) {
     );
   }
 
-  const series = posts.map((p) => ({ day: p.day, views: p.views }));
+  const series = posts.map((p, index) => ({
+    key: p.id ? `${p.id}-${index}` : `${p.day}-${index}`,
+    day: p.day,
+    views: p.views,
+    verdict: p.verdict,
+  }));
   const maxViews = Math.max(...series.map((point) => point.views), median, 1);
 
   return (
@@ -66,18 +71,17 @@ export default function Bars({ posts, median, className }: BarsProps) {
       variants={staggerContainer(0.06)}
     >
       {series.map((point) => {
-        const post = posts.find((item) => item.day === point.day);
         const percent = (point.views / maxViews) * 100;
 
         return (
-          <div key={point.day} className="bars__col">
+          <div key={point.key} className="bars__col">
             <div className="bars__stack">
               <span
                 className="bars__median"
                 style={{ bottom: `${(median / maxViews) * 100}%` }}
               />
               <motion.span
-                className={`bars__fill${post ? ` is-${post.verdict}` : ""}`}
+                className={`bars__fill${point.verdict ? ` is-${point.verdict}` : ""}`}
                 custom={percent}
                 variants={barReveal}
               />

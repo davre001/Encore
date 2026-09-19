@@ -316,7 +316,7 @@ def get_chat_history(
             query = db.query(ChatMessage)
             if video_id:
                 query = query.filter(ChatMessage.video_id == video_id)
-            elif user_id:
+            if user_id:
                 query = query.filter(ChatMessage.user_id == user_id)
             rows = query.order_by(ChatMessage.created_at.desc()).limit(limit).all()
             rows.reverse()
@@ -327,6 +327,7 @@ def get_chat_history(
                     "text": r.text,
                     "createdAt": r.created_at,
                     "videoId": r.video_id,
+                    "userId": r.user_id,
                 }
                 for r in rows
             ]
@@ -372,8 +373,16 @@ def save_chat_message(
             "text": text,
             "createdAt": now_ms,
             "videoId": video_id,
+            "userId": user_id,
         }
 
+
+
+def _alias_for_user(user_id: Optional[str]) -> str:
+    if not user_id:
+        return MINDS_ALIAS
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in str(user_id))
+    return f"{MINDS_ALIAS}-{safe[:48]}"
 
 # --- Intelligent Reasoning Engine (Runs when Minds API key isn't wired) ---
 
@@ -494,7 +503,7 @@ def chat_reply(
         else:
             prompt = text
 
-        ai = complete(prompt, alias=MINDS_ALIAS)
+        ai = complete(prompt, alias=_alias_for_user(user_id))
         if ai and len(ai.strip()) > 3:
             return ai.strip()
 

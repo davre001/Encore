@@ -9,7 +9,7 @@ import { Stagger, StaggerItem } from "@/components/motion/Stagger";
 import { hoverLift } from "@/lib/motion";
 import * as api from "@/api/client";
 import type { AnalyticsData } from "@/types";
-import { formatWhen, loadProjects, type Project } from "@/lib/mockProjects";
+import { formatWhen, type Project } from "@/lib/mockProjects";
 
 function percent(value: number) {
   return `${Math.round(value * 100)}%`;
@@ -32,8 +32,6 @@ export default function Analytics() {
   const [projects, setProjects] = useState<Project[]>([]);
 
   useEffect(() => {
-    setProjects(loadProjects());
-
     api
       .getAnalytics()
       .then((res) => {
@@ -59,10 +57,7 @@ export default function Analytics() {
           views: bp.views,
           url: bp.postUrl ?? undefined,
         }));
-        setProjects((prev) => {
-          const ids = new Set(mapped.map((m) => m.id));
-          return [...mapped, ...prev.filter((p) => !ids.has(p.id))];
-        });
+        setProjects(mapped);
       })
       .catch(() => {});
   }, []);
