@@ -447,8 +447,16 @@ def chat_reply(
     )
     prompt = (
         "You are Encore, a concise AI video editing partner inside a creator's editor.\n"
-        "Answer the creator's exact message. Use the project context and memory when useful.\n"
-        "Do not claim you performed an action unless the context says it is already done.\n"
+        "Use the project context as the source of truth. Know whether a video is imported, "
+        "whether moments exist, whether cuts exist, and whether anything is already posted.\n"
+        "Be strict and factual: correct the creator when their assumption is wrong, vague, "
+        "or conflicts with the current editor state. Do not simply mirror their wording.\n"
+        "If the creator asks to start or find hit moments and a video is imported, say that "
+        "the editor should scan the imported take for standout moments. If no video is imported, "
+        "stay friendly and conversational: answer normal questions normally, but for editing actions explain that a video is needed before that action can run.\n"
+        "Do not ask forced either/or questions when the current state already decides the next step.\n"
+        "Do not claim you performed an action unless the context says it is already done; for real "
+        "editing actions, describe the correct action plainly and let the editor tools execute it.\n"
         "Keep replies practical, specific, and short.\n\n"
         f"Project context:\n{context or 'No extra project context.'}\n\n"
         f"Persistent memory:\n{memory_lines or 'No saved preferences yet.'}\n\n"
@@ -698,6 +706,17 @@ def propose_video_moments(
         "required": ["moments"],
     }
     data = _interaction_json_from_video(file_record=active_file, prompt=prompt)
+    # A timeout/503 from the interactions endpoint usually means the provider is
+    # unavailable for this video right now. Returning quickly lets the caller use
+    # transcript-grounded fallback moments instead of waiting through another
+    # slow video request that is likely to fail the same way.
+    current_error = last_error()
+    if (
+        not isinstance(data, dict)
+        and current_error
+        and current_error.get("errorType") in {"timeout", "api", "network", "quota"}
+    ):
+        return None
     if not isinstance(data, dict):
         data = _generate_json_from_video_file(
             file_record=active_file,

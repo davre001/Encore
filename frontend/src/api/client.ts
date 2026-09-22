@@ -206,10 +206,17 @@ export async function rewriteClip(
 }
 
 /** Re-render a clip on disk with ffmpeg. */
-export async function renderClip(clipId: string): Promise<Clip> {
+export async function renderClip(
+  clipId: string,
+  captionTrack?: CaptionTrack | null
+): Promise<Clip> {
   const res = await fetch(
     `${API}/clips/${encodeURIComponent(clipId)}/render`,
-    { method: "POST", headers: userHeaders() }
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...userHeaders() },
+      body: JSON.stringify({ captionTrack: captionTrack ?? null }),
+    }
   );
   return handleResponse<Clip>(res);
 }

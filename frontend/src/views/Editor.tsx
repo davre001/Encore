@@ -294,13 +294,37 @@ function isNo(text: string) {
   return /^(no|nope|don't|dont|cancel|stop)\b/i.test(text.trim());
 }
 
+function isDonePrompt(text: string) {
+  const lower = text.trim().toLowerCase().replace(/[.!?]+$/, "");
+  return /^(done|selected|i selected it|ive selected it|i've selected it|picked it|i picked it|ok|okay|ready)$/.test(lower);
+}
+
+function isPleaseFollowup(text: string) {
+  const lower = text.trim().toLowerCase().replace(/[.!?]+$/, "");
+  return /^(pls|plz|please|please do|do it please|post it please|publish it please)$/.test(lower);
+}
+
 function isCreateMomentsPrompt(text: string) {
   const lower = text.trim().toLowerCase();
   return (
     lower === "/moments" ||
     lower === "/cuts" ||
+    /\b(moment|moments|beat|beats)\b.*\b(hit|hits|strong|strongest|best|viral|hook|hooks|highlight|highlights)\b/.test(lower) ||
+    /\b(hit|hits|strong|strongest|best|viral|hook|hooks|highlight|highlights)\b.*\b(moment|moments|beat|beats)\b/.test(lower) ||
+    /\b(find|scan|detect|analy[sz]e|pull|pick)\b.*\b(moment|moments|beat|beats|hook|hooks|highlight|highlights)\b/.test(lower) ||
     /\b(load|create|make|add|accept|keep|turn)\b.*\b(moment|moments|beat|beats)\b.*\b(timeline|cut|cuts|clip|clips)?\b/.test(lower) ||
     /\b(create|make|add)\b.*\b(best|strongest)\b.*\b(cut|cuts|clip|clips|moment|moments)\b/.test(lower)
+  );
+}
+
+function isStartWorkPrompt(text: string) {
+  const lower = text.trim().toLowerCase().replace(/[.!?]+$/, "");
+  return (
+    lower === "start" ||
+    lower === "yes start" ||
+    lower === "start now" ||
+    /^(yes|yeah|yep|yup|ok|okay|sure|go ahead|do it)\s+(start|begin|scan|analyze|analyse|find|detect)\b/.test(lower) ||
+    /^(start|begin|scan|analyze|analyse|find|detect)\b.*\b(video|take|moments|beats|hooks|highlights)?\b/.test(lower)
   );
 }
 
@@ -354,7 +378,7 @@ function timedOutAnalysisStatus(videoId: string): AnalysisStatus {
     videoId,
     stage: "error",
     message:
-      "The video AI is taking too long to finish. Try again, or use a shorter/lower-resolution clip.",
+      "The video AI is still working. If this keeps going, retry moments or use a shorter/lower-resolution clip.",
     errorType: "timeout",
     updatedAt: Date.now(),
     done: true,
@@ -504,6 +528,7 @@ export default function Editor() {
   // Manual mode asked before running the auto-approve pipeline. The next reply
   // is yes or no to that question, not a new instruction.
   const pendingManualConfirm = useRef<string | null>(null);
+  const pendingSelectedPublish = useRef<string | null>(null);
 
   /** The chat thread this session talks into: the project, and only the project.
    *
@@ -954,7 +979,7 @@ export default function Editor() {
       let foundMoments: Moment[] = [];
       let latestStatus: AnalysisStatus | null = null;
       const startTime = Date.now();
-      const timeoutMs = 180_000;
+      const timeoutMs = 420_000;
       while (Date.now() - startTime < timeoutMs) {
         await sleep(1000);
         const status = await api.getAnalysisStatus(nextVideo.id).catch(() => null);
@@ -975,7 +1000,7 @@ export default function Editor() {
           ...latestStatus,
           stage: "error",
           message:
-            "The video AI is taking too long to finish. Try again, or use a shorter/lower-resolution clip.",
+            "The video AI is still working. If this keeps going, retry moments or use a shorter/lower-resolution clip.",
           errorType: "timeout",
           updatedAt: Date.now(),
           done: true,
@@ -1051,22 +1076,46 @@ export default function Editor() {
     }
   }
 
-  /** Strongest first — the detector scores each beat 0-100; unranked rows keep order. */
+  /** Strongest first - the detector scores each beat 0-100; unranked rows keep order. */
   function rankMoments(candidates: Moment[]): Moment[] {
     return [...candidates].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }
 
+  function overlapSeconds(a: { start: number; end: number }, b: { start: number; end: number }) {
+    return Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start));
+  }
+
+  function momentForClip(clip: Clip, candidateMoments: Moment[]): Moment | null {
+    const direct = candidateMoments.find((moment) => moment.id === clip.momentId);
+    if (direct) return direct;
+
+    let best: { moment: Moment; overlap: number } | null = null;
+    for (const moment of candidateMoments) {
+      const overlap = overlapSeconds(clip, moment);
+      const clipDuration = Math.max(0.1, clip.end - clip.start);
+      const momentDuration = Math.max(0.1, moment.end - moment.start);
+      const coverage = overlap / Math.min(clipDuration, momentDuration);
+      if (coverage < 0.55) continue;
+      if (!best || overlap > best.overlap) best = { moment, overlap };
+    }
+    return best?.moment ?? null;
+  }
+
   /**
-   * The best cut to act on: prefer a draft over an already-posted clip, then the
-   * highest-scoring moment behind it. Previously this was just the first match,
-   * which made "prepare the best cut" pick whatever happened to be earliest.
+   * Pick the actual strongest cut, not the first cut in the array. The main
+   * signal is the detector's 0-100 moment score. If an older/local clip lost its
+   * momentId, match by timestamp overlap before falling back to order.
    */
   function pickBestClip(candidateClips: Clip[], candidateMoments: Moment[]): Clip | null {
-    const scoreFor = (clip: Clip) =>
-      candidateMoments.find((moment) => moment.id === clip.momentId)?.score ?? 0;
+    const originalIndex = new Map(candidateClips.map((clip, index) => [clip.id, index]));
+    const scoreFor = (clip: Clip) => momentForClip(clip, candidateMoments)?.score ?? 0;
     const ranked = [...candidateClips].sort((a, b) => {
       if (a.posted !== b.posted) return a.posted ? 1 : -1;
-      return scoreFor(b) - scoreFor(a);
+      const scoreDelta = scoreFor(b) - scoreFor(a);
+      if (Math.abs(scoreDelta) > 0.01) return scoreDelta;
+      const durationDelta = (b.end - b.start) - (a.end - a.start);
+      if (Math.abs(durationDelta) > 0.01) return durationDelta;
+      return (originalIndex.get(a.id) ?? 0) - (originalIndex.get(b.id) ?? 0);
     });
     return ranked[0] ?? null;
   }
@@ -1586,8 +1635,13 @@ export default function Editor() {
 
   async function downloadRenderedClip(clip: Clip) {
     if (typeof document === "undefined") return;
-    const ready = await ensureServerClip(clip);
-    const rendered = await api.renderClip(ready.id);
+    // Export is render-only. Posted clips are immutable for edits, but they must
+    // still be downloadable, so do not PATCH them before rendering.
+    const ready = clip.posted && serverClipIds.current.has(clip.id)
+      ? clip
+      : await ensureServerClip(clip);
+    const track = captionTracks.find((item) => item.clipId === ready.id || item.clipId === clip.id) ?? null;
+    const rendered = await api.renderClip(ready.id, track);
     serverClipIds.current.add(rendered.id);
 
     const link = document.createElement("a");
@@ -2355,7 +2409,7 @@ export default function Editor() {
     let foundMoments: Moment[] = [];
     let latestStatus: AnalysisStatus | null = null;
     const startTime = Date.now();
-    const timeoutMs = 180_000;
+    const timeoutMs = 420_000;
 
     while (Date.now() - startTime < timeoutMs) {
       await sleep(1000);
@@ -2382,7 +2436,7 @@ export default function Editor() {
     await api.saveEditorEvent(targetId, text, "you").catch(() => null);
 
     if (!video?.id) {
-      pushMind("Upload a video first, then I can regenerate moments for it.");
+      pushMind("I can do that, but I need a video in the editor first. Upload your take, then I'll rescan it for stronger moments.");
       return;
     }
 
@@ -2484,7 +2538,7 @@ export default function Editor() {
     await api.saveEditorEvent(targetId, commandText, "you").catch(() => null);
 
     if (!video?.id && !clips.length) {
-      pushMind("Upload a video first, then I can create moments, cuts, captions, and publish from it.");
+      pushMind("I'm with you. Drop a video into the editor first, then I can find the moments that hit, turn them into cuts, add captions, and publish when you're ready.");
       return;
     }
 
@@ -2604,7 +2658,7 @@ export default function Editor() {
     await api.saveEditorEvent(targetId, commandText, "you").catch(() => null);
 
     if (!video?.id) {
-      pushMind("Upload a video first, then I can create a cut from that range.");
+      pushMind("I can make that cut once there's a video on the timeline. Upload the take first, then give me the range again.");
       return;
     }
 
@@ -2650,11 +2704,13 @@ export default function Editor() {
     // a manual "publish my cut" used to wander off and cut the strongest moments.
     const clip = clips.find((item) => item.id === selectedClipId) ?? null;
     if (!clip) {
+      pendingSelectedPublish.current = commandText;
       pushMind(
-        "Select a cut first. In manual mode I publish that cut and nothing else — I won't pick moments unless you ask.",
+        "Select the cut you want, then type \"done\" and I'll publish that exact cut.",
       );
       return;
     }
+    pendingSelectedPublish.current = null;
     if (clip.posted) {
       pushMind(`“${clip.title}” is already on YouTube. I won't post it again.`);
       return;
@@ -2692,12 +2748,12 @@ export default function Editor() {
       pushMind("Select a cut first. In manual mode I'll caption that cut only.");
       return;
     }
-    pushMind(`Adding captions to “${clip.title}” — the cut you selected.`);
+    pushMind(`Adding captions to "${clip.title}" - the cut you selected.`);
     setBusy(true);
     setTool("caption");
     try {
       setActionProgress({
-        label: `Adding captions to “${clip.title}”`,
+        label: `Adding captions to "${clip.title}"`,
         percent: 48,
       });
       await generateCaptionTrackForRange({
@@ -2709,7 +2765,7 @@ export default function Editor() {
         language: "en",
       });
       setActionProgress({
-        label: `Captions added to “${clip.title}”`,
+        label: `Captions added to "${clip.title}"`,
         percent: 100,
       });
       await sleep(1200);
@@ -2847,6 +2903,24 @@ export default function Editor() {
       return;
     }
 
+    if (pendingSelectedPublish.current && isDonePrompt(text)) {
+      const pending = pendingSelectedPublish.current;
+      pendingSelectedPublish.current = null;
+      await publishSelectedFromChat(pending);
+      return;
+    }
+    if (isPleaseFollowup(text)) {
+      const selected = clips.find((item) => item.id === selectedClipId) ?? null;
+      if (selected?.posted) {
+        const link = selected.postUrl ? ` Watch it here: ${selected.postUrl}` : "";
+        pushMind(`"${selected.title}" is already on YouTube.${link}`);
+        return;
+      }
+      if (selected) {
+        await publishSelectedFromChat("publish the selected cut to YouTube");
+        return;
+      }
+    }
     if (pendingManualConfirm.current) {
       const pending = pendingManualConfirm.current;
       if (isYes(text)) {
@@ -2907,7 +2981,7 @@ export default function Editor() {
       return;
     }
 
-    if (isCreateMomentsPrompt(text)) {
+    if (isCreateMomentsPrompt(text) || isStartWorkPrompt(text)) {
       await runAiEditorAction(text, { captions: asksForCaptions(text) });
       return;
     }

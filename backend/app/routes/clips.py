@@ -7,13 +7,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from ..dependencies import get_user_id
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..models.schemas import Clip, ClipCreate, ClipUpdate
 from .. import storage
 from ..services import captions, ffmpeg
 
 router = APIRouter()
+
+
+class ClipRenderBody(BaseModel):
+    """Optional render-only overlays. Rendering must work even for posted clips."""
+
+    caption_track: Optional[dict] = Field(default=None, alias="captionTrack")
 
 
 class RewriteBody(BaseModel):
@@ -76,6 +82,7 @@ async def rewrite_clip(
 @router.post("/{clip_id}/render", response_model=Clip)
 async def render_clip(
     clip_id: str,
+    body: ClipRenderBody | None = None,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Clip:
     record = storage.get_clip(clip_id)
@@ -86,8 +93,16 @@ async def render_clip(
 
     video = storage.get_video(record["videoId"])
     src_path = video.get("srcPath") if video else None
+    caption_segments = None
+    if body and isinstance(body.caption_track, dict):
+        caption_segments = body.caption_track.get("segments")
     if src_path:
-        rendered = ffmpeg.render_clip(src_path, record["start"], record["end"])
+        rendered = ffmpeg.render_clip(
+            src_path,
+            record["start"],
+            record["end"],
+            caption_segments if isinstance(caption_segments, list) else None,
+        )
         record = storage.update_clip(clip_id, {"renderPath": rendered}) or record
     return Clip.model_validate(record)
 

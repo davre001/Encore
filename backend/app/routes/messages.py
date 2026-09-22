@@ -154,8 +154,10 @@ def _editor_context(video_id: str, user_id: Optional[str]) -> str:
     lines: list[str] = []
     if video:
         lines.append(
-            f"Video: {video.get('name', 'Untitled')} ({float(video.get('duration') or 0):.1f}s)."
+            f"Video imported: yes. File: {video.get('name', 'Untitled')} ({float(video.get('duration') or 0):.1f}s)."
         )
+    else:
+        lines.append("Video imported: no. Normal conversation is still allowed, but editing actions like moments, cuts, captions, or publishing need an uploaded take first.")
     if status:
         lines.append(
             f"Analysis: {status.get('stage')} - {status.get('message')}"

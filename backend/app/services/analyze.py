@@ -122,6 +122,16 @@ def find_moments(
     if not transcript or not minds.is_meaningful_speech(transcript):
         return []
 
+    # If video understanding failed because the provider timed out or returned a
+    # temporary API error, do not spend another minute asking the same provider
+    # to analyze text. Produce grounded transcript moments now so the editor can
+    # keep moving instead of landing in an empty timeout state.
+    ai_error = gemini.last_error()
+    if ai_error and ai_error.get("errorType") in {"timeout", "api", "network", "quota"}:
+        fallback = _from_transcript_chunks(video_id, transcript, span)
+        if fallback:
+            return _ranked(fallback)
+
     proposed = gemini.propose_moments(transcript, span)
     if not proposed and minds.available():
         proposed = minds.propose_moments(transcript, span)
@@ -140,4 +150,4 @@ def find_moments(
             ]
         )
 
-    return []
+    return _ranked(_from_transcript_chunks(video_id, transcript, span))
