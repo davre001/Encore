@@ -71,6 +71,7 @@ type ClipContextMenuProps = {
   canPaste: boolean;
   /** Enables Separate audio — Encore clips carry no split audio track yet. */
   hasAudio?: boolean;
+  hasCuts?: boolean;
   onAction: (action: ClipMenuAction) => void;
   onClose: () => void;
 };
@@ -82,6 +83,7 @@ export default function ClipContextMenu({
   frozen,
   canPaste,
   hasAudio = false,
+  hasCuts = false,
   onAction,
   onClose,
 }: ClipContextMenuProps) {
@@ -129,7 +131,10 @@ export default function ClipContextMenu({
             { action: "duplicate", label: "Duplicate", Icon: CopyPlus, shortcut: "Ctrl D" },
             { action: "delete", label: "Delete", Icon: Trash2, shortcut: "Del" },
           ],
-          [{ action: "download", label: "Download take", Icon: Download }],
+          [
+            { action: "rerun-analysis", label: hasCuts ? "Re-analyze" : "Analyze", Icon: RefreshCw },
+            { action: "download", label: "Download take", Icon: Download },
+          ],
         ]
       : [
           [

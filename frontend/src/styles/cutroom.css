@@ -872,6 +872,31 @@
   font-variant-numeric: tabular-nums;
 }
 
+
+.cut__progress-stop {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 6px;
+  background: rgba(127, 29, 29, 0.28);
+  color: #fecaca;
+  cursor: pointer;
+}
+
+.cut__progress-stop:hover {
+  border-color: rgba(248, 113, 113, 0.8);
+  background: rgba(127, 29, 29, 0.46);
+}
+
+.cut__progress-stop svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+
 .cut__chat-progress-track {
   display: block;
   height: 0.32rem;

@@ -64,6 +64,7 @@ type ToolPanelProps = {
   onPrompt: (value: string) => void;
   onSend: (text: string) => void;
   onReset: () => void;
+  onStopAction: () => void;
   onPickClip: (id: string) => void;
   onClipChange: (clip: Clip) => void;
   onRemoveHashtag: (clipId: string, hashtag: string) => void;
@@ -274,6 +275,15 @@ export default function ToolPanel(props: ToolPanelProps) {
             <div className="cut__chat-progress-top">
               <span>{props.analysisStatus.message}</span>
               <b>{ANALYSIS_PROGRESS[props.analysisStatus.stage]}%</b>
+              <button
+                type="button"
+                className="cut__progress-stop"
+                aria-label="Stop current action"
+                title="Stop current action"
+                onClick={props.onStopAction}
+              >
+                <Square aria-hidden="true" />
+              </button>
             </div>
             <span className="cut__chat-progress-track">
               <i
@@ -288,6 +298,15 @@ export default function ToolPanel(props: ToolPanelProps) {
             <div className="cut__chat-progress-top">
               <span>{props.actionProgress.label}</span>
               <b>{props.actionProgress.percent}%</b>
+              <button
+                type="button"
+                className="cut__progress-stop"
+                aria-label="Stop current action"
+                title="Stop current action"
+                onClick={props.onStopAction}
+              >
+                <Square aria-hidden="true" />
+              </button>
             </div>
             <span className="cut__chat-progress-track">
               <i style={{ width: `${props.actionProgress.percent}%` }} />

@@ -7,7 +7,7 @@ import os
 import shutil
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
+from fasta 4pi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import storage
@@ -16,6 +16,9 @@ from ..models.schemas import AnalysisStatus, Video
 from ..services import analyze, ffmpeg, gemini, transcribe
 
 router = APIRouter()
+
+_ACTIVE_ANALYSES: set[str] = set()
+STALE_ANALYSIS_MS = 90_000
 
 
 def _status(video_id: str, stage: str, message: str, **extra) -> None:
@@ -64,6 +67,9 @@ def _save_video_record(
 
 def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
     """Background analysis pipeline. Never raises."""
+    if video_id in _ACTIVE_ANALYSES:
+        return
+    _ACTIVE_ANALYSES.add(video_id)
     try:
         _status(video_id, "thinking", "Preparing the video for analysis.")
         _status(video_id, "transcribing", "Reading the audio and speech timing.")
@@ -99,6 +105,8 @@ def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
             "Unexpected error while analyzing the video.",
             errorType="unknown",
         )
+    finally:
+        _ACTIVE_ANALYSES.discard(video_id)
 
 
 @router.post("", response_model=Video)
@@ -237,14 +245,15 @@ async def retry_analysis(
     if not src_path or not os.path.isfile(src_path):
         raise HTTPException(status_code=404, detail="video file not found")
 
-    storage.save_moments(video_id, [])
-    _status(video_id, "queued", "Regenerating moments from the video.")
-    background_tasks.add_task(
-        _propose_moments,
-        video_id,
-        src_path,
-        float(record.get("duration") or 0),
-    )
+    if video_id not in _ACTIVE_ANALYSES:
+        storage.save_moments(video_id, [])
+        _status(video_id, "queued", "Regenerating moments from the video.")
+        background_tasks.add_task(
+            _propose_moments,
+            video_id,
+            src_path,
+            float(record.get("duration") or 0),
+        )
     status = storage.get_analysis_status(video_id)
     return AnalysisStatus.model_validate(status)
 
@@ -252,6 +261,7 @@ async def retry_analysis(
 @router.get("/{video_id}/analysis", response_model=AnalysisStatus)
 async def get_analysis_status(
     video_id: str,
+    background_tasks: BackgroundTasks,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> AnalysisStatus:
     record = storage.get_video(video_id)
@@ -266,8 +276,40 @@ async def get_analysis_status(
         "updatedAt": storage.now_ms(),
         "done": False,
     }
-    return AnalysisStatus.model_validate(status)
 
+    moments = storage.list_moments(video_id)
+    if moments and not status.get("done") and video_id not in _ACTIVE_ANALYSES:
+        suffix = "s" if len(moments) != 1 else ""
+        _status(video_id, "complete", f"Found {len(moments)} standout moment{suffix}.")
+        status = storage.get_analysis_status(video_id) or status
+
+    is_running_status = not status.get("done") and status.get("stage") in {
+        "queued",
+        "uploaded",
+        "thinking",
+        "transcribing",
+        "watching",
+        "generating",
+    }
+    age_ms = storage.now_ms() - int(status.get("updatedAt") or 0)
+    src_path = record.get("srcPath")
+    if (
+        is_running_status
+        and video_id not in _ACTIVE_ANALYSES
+        and age_ms > STALE_ANALYSIS_MS
+        and src_path
+        and os.path.isfile(src_path)
+    ):
+        _status(video_id, "queued", "Resuming analysis after refresh.")
+        background_tasks.add_task(
+            _propose_moments,
+            video_id,
+            src_path,
+            float(record.get("duration") or 0),
+        )
+        status = storage.get_analysis_status(video_id) or status
+
+    return AnalysisStatus.model_validate(status)
 
 @router.get("/{video_id}", response_model=Video)
 async def get_video(

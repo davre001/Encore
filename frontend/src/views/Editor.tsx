@@ -65,6 +65,11 @@ function youMessage(text: string): Message {
  * filed under here — but nothing ever loads this thread back, which is what
  * keeps a fresh editor from opening on somebody else's conversation. */
 const PRE_PROJECT_THREAD = "notebook";
+const STOPPED_ACTION_PREFIX = "encore.stoppedAction.";
+
+function stoppedActionKey(id: string | null | undefined) {
+  return `${STOPPED_ACTION_PREFIX}${id || PRE_PROJECT_THREAD}`;
+}
 
 const UNPROMPTED_MIND_LINES = new Set([
   "I am preparing the video, reading the audio, and looking for beats that stand alone.",
@@ -447,6 +452,9 @@ export default function Editor() {
   // publishing). Analysis phases come from analysisStatus instead, and every
   // action clears this in a finally so a finished bar never lingers on screen.
   const [actionProgress, setActionProgress] = useState<{ label: string; percent: number } | null>(null);
+  const [actionStopped, setActionStopped] = useState(false);
+  const stoppedActionRef = useRef(false);
+  const rejoinAnalysisRef = useRef<string | null>(null);
   const [stamp, setStamp] = useState("");
 
   // Clip editing: a one-slot clipboard for copy/cut/paste and a linear
@@ -541,6 +549,13 @@ export default function Editor() {
    */
   const threadId = projectId ?? PRE_PROJECT_THREAD;
   projectIdRef.current = projectId;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stopped = window.localStorage.getItem(stoppedActionKey(projectId)) === "1";
+    stoppedActionRef.current = stopped;
+    setActionStopped(stopped);
+  }, [projectId]);
   // Posted/verdict state persisted onto the project so History can tell a draft
   // apart from a posted hit / mid / flop and resume the right one.
   const [projectStatus, setProjectStatus] =
@@ -627,6 +642,12 @@ export default function Editor() {
               setClips(found);
               serverClipIds.current = new Set(found.map((clip) => clip.id));
               setSelectedClipId(found[0]?.id ?? null);
+            })
+            .catch(() => {});
+          api
+            .getAnalysisStatus(proj.videoId)
+            .then((status) => {
+              if (mounted && status) setAnalysisStatus(status);
             })
             .catch(() => {});
         }
@@ -878,6 +899,7 @@ export default function Editor() {
         window.history.replaceState({}, "", next.toString());
       }
     }
+    clearStoppedAction();
     setBusy(true);
     setAnalysisStatus({
       videoId: "pending",
@@ -982,6 +1004,7 @@ export default function Editor() {
       const timeoutMs = 420_000;
       while (Date.now() - startTime < timeoutMs) {
         await sleep(1000);
+        if (stoppedActionRef.current) return;
         const status = await api.getAnalysisStatus(nextVideo.id).catch(() => null);
         if (status) {
           latestStatus = status;
@@ -1132,6 +1155,7 @@ export default function Editor() {
       const acceptedMoments: Moment[] = [];
       let index = 0;
       for (const moment of pending) {
+        if (stoppedActionRef.current) return;
         index += 1;
         // Name the beat being cut and count through the batch. This path makes
         // no other report, so the loader is the only place the creator can see
@@ -1567,6 +1591,7 @@ export default function Editor() {
 
   async function reanalyzeTake() {
     if (!video?.id || busy) return;
+    clearStoppedAction();
     setTool("moments");
     setBusy(true);
     setRegeneratingMoments(true);
@@ -1583,6 +1608,7 @@ export default function Editor() {
       const started = await api.retryAnalysis(video.id);
       setAnalysisStatus(started);
       const { foundMoments, latestStatus } = await pollMomentAnalysis(video.id);
+      if (stoppedActionRef.current) return;
       setMoments(foundMoments);
       if (latestStatus) setAnalysisStatus(latestStatus);
 
@@ -2123,6 +2149,9 @@ export default function Editor() {
       case "download":
         downloadTake();
         break;
+      case "rerun-analysis":
+        void reanalyzeTake();
+        break;
       default:
         break;
     }
@@ -2403,6 +2432,37 @@ export default function Editor() {
     setExporting(null);
   }
 
+  async function stopCurrentAction() {
+    stoppedActionRef.current = true;
+    setActionStopped(true);
+    setBusy(false);
+    setRegeneratingMoments(false);
+    setActionProgress(null);
+    if (analysisStatus && !analysisStatus.done) {
+      setAnalysisStatus({
+        ...analysisStatus,
+        stage: "error",
+        message: "Stopped by user.",
+        errorType: "unknown",
+        updatedAt: Date.now(),
+        done: true,
+      });
+    }
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(stoppedActionKey(projectId), "1");
+    }
+    const target = threadId;
+    await api.saveEditorEvent(target, "Stopped current editor action.", "you").catch(() => null);
+  }
+
+  function clearStoppedAction() {
+    stoppedActionRef.current = false;
+    setActionStopped(false);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(stoppedActionKey(projectId));
+    }
+  }
+
   /* ---- Mind ---- */
 
   async function pollMomentAnalysis(videoId: string) {
@@ -2431,6 +2491,32 @@ export default function Editor() {
     return { foundMoments, latestStatus };
   }
 
+  // After a refresh, reconnect the visible loader to the backend analysis job.
+  // If auto approve is on and the user has not stopped the action, continue the
+  // same pipeline when moments arrive.
+  useEffect(() => {
+    if (!video?.id || !analysisStatus || analysisStatus.done || actionStopped) return;
+    if (rejoinAnalysisRef.current === video.id) return;
+    rejoinAnalysisRef.current = video.id;
+    let cancelled = false;
+    void (async () => {
+      const { foundMoments, latestStatus } = await pollMomentAnalysis(video.id);
+      if (cancelled || stoppedActionRef.current) return;
+      if (foundMoments.length > 0) {
+        setMoments(foundMoments);
+        if (aiPermissionMode === "auto") {
+          await autoApproveMoments(foundMoments);
+        }
+      } else if (latestStatus) {
+        setAnalysisStatus(latestStatus);
+      }
+      rejoinAnalysisRef.current = null;
+    })();
+    return () => {
+      cancelled = true;
+      rejoinAnalysisRef.current = null;
+    };
+  }, [!!analysisStatus && !analysisStatus.done, actionStopped, aiPermissionMode, video?.id]);
   async function regenerateMomentsFromChat(text: string) {
     const targetId = threadId;
     await api.saveEditorEvent(targetId, text, "you").catch(() => null);
@@ -2440,6 +2526,7 @@ export default function Editor() {
       return;
     }
 
+    clearStoppedAction();
     setTool("mind");
     setBusy(true);
     setRegeneratingMoments(true);
@@ -2458,6 +2545,7 @@ export default function Editor() {
       // No hardcoded progress here: the polled analysisStatus.stage now drives
       // the bar, so it tracks the backend's real stage instead of a fixed guess.
       const { foundMoments, latestStatus } = await pollMomentAnalysis(video.id);
+      if (stoppedActionRef.current) return;
       setMoments(foundMoments);
 
       if (foundMoments.length > 0) {
@@ -2542,6 +2630,7 @@ export default function Editor() {
       return;
     }
 
+    clearStoppedAction();
     setTool("cuts");
     setBusy(true);
     try {
@@ -2570,6 +2659,7 @@ export default function Editor() {
         const started = await api.retryAnalysis(video.id);
         setAnalysisStatus(started);
         const result = await pollMomentAnalysis(video.id);
+        if (stoppedActionRef.current) return;
         workingMoments = result.foundMoments;
         setMoments(workingMoments);
       }
@@ -2587,6 +2677,7 @@ export default function Editor() {
         pushMind(`Loading ${toAccept.length} best moment${toAccept.length === 1 ? "" : "s"} into the timeline now.`);
         const accepted: Moment[] = [];
         for (const moment of toAccept) {
+          if (stoppedActionRef.current) return;
           try {
             const updated = await api.decideMoment(moment.id, "accept");
             accepted.push(updated);
@@ -3322,7 +3413,7 @@ export default function Editor() {
         tool={tool}
         video={video}
         busy={busy}
-        analysisStatus={analysisStatus}
+        analysisStatus={actionStopped ? null : analysisStatus}
         moments={moments}
         clips={clips}
         messages={messages.filter((message) => !isUnpromptedChatLine(message))}
@@ -3349,6 +3440,7 @@ export default function Editor() {
         onDecideMoment={handleDecideMoment}
         onToolChange={setTool}
         onReanalyze={() => void reanalyzeTake()}
+        onStopAction={() => void stopCurrentAction()}
       />
 
       <section className="cut__stage" aria-label="Preview and timeline" ref={stageRef}>
@@ -3568,6 +3660,7 @@ export default function Editor() {
           frozen={menuClip?.frozen}
           canPaste={!!clipboard}
           hasAudio={false}
+          hasCuts={clips.length > 0}
           onAction={onMenuAction}
           onClose={() => setMenu(null)}
         />
