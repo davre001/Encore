@@ -26,6 +26,8 @@ export type Moment = {
   label: string;
   reason: string;
   status: MomentStatus;
+  /** Standalone strength 0-100 from the detector; moments arrive best-first. */
+  score: number;
 };
 
 export type AnalysisStatus = {
@@ -83,7 +85,11 @@ export type PostCheck = {
   clipId: string;
   views: number;
   median: number;
-  verdict: "hit" | "mid" | "flop";
+  /**
+   * "pending" means the post is too young to grade — YouTube needs hours before
+   * a view count means anything. It is a check state, never a stored verdict.
+   */
+  verdict: "hit" | "mid" | "flop" | "pending";
   note: string;
   recutHook?: string;
 };

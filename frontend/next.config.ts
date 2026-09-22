@@ -7,6 +7,9 @@ const nextConfig: NextConfig = {
     // Video uploads and take-file streaming exceed Next's 10MB default.
     middlewareClientMaxBodySize: "512mb",
     proxyClientMaxBodySize: "512mb",
+    // Dev rewrites otherwise abort at 30s with a plain "Internal Server Error",
+    // which is shorter than a Mind reply or a publish.
+    proxyTimeout: 180_000,
   } as NextConfig["experimental"],
   // Allow external profile-picture hosts so <img src={user.picture}> renders.
   images: {

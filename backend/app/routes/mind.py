@@ -72,10 +72,10 @@ async def chat_with_mind(
 ) -> Message:
     """Blocking one-shot ask, for scripts and diagnostics."""
     minds.save_chat_message(
-        role="you", text=body.text, video_id=body.video_id, user_id=user_id
+        role="you", text=body.text, thread_id=body.video_id, user_id=user_id
     )
     memories = minds.get_persistent_memories(user_id)
-    history = minds.get_chat_history(video_id=body.video_id, user_id=user_id)
+    history = minds.get_chat_history(thread_id=body.video_id, user_id=user_id)
     reply_text = None
     if gemini.available():
         reply_text = gemini.chat_reply(
@@ -92,6 +92,6 @@ async def chat_with_mind(
             user_id=user_id,
         )
     saved_reply = minds.save_chat_message(
-        role="mind", text=reply_text, video_id=body.video_id, user_id=user_id
+        role="mind", text=reply_text, thread_id=body.video_id, user_id=user_id
     )
     return Message.model_validate(saved_reply)

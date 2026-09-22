@@ -99,7 +99,7 @@ export default function TransportBar({
         <IconBtn label="Undo" Icon={Undo2} onClick={() => onEdit("undo")} disabled={!canUndo} />
         <IconBtn label="Redo" Icon={Redo2} onClick={() => onEdit("redo")} disabled={!canRedo} />
         <span className="cut__tool-divider" aria-hidden="true" />
-        <IconBtn label="Delete take" Icon={Trash2} onClick={() => onEdit("delete")} disabled={!canEdit} />
+        <IconBtn label="Delete selected" Icon={Trash2} onClick={() => onEdit("delete")} disabled={!canEdit} />
         <IconBtn label="Cut at playhead" Icon={Scissors} onClick={() => onEdit("cut")} disabled={!canEdit} />
         <IconBtn label="Generate captions" Icon={Captions} onClick={() => onEdit("captions")} disabled={!canEdit} />
         <IconBtn label="Trim left side to playhead" Icon={StepBack} onClick={() => onEdit("trim-left")} disabled={!canEdit} />

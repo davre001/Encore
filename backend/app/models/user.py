@@ -95,11 +95,22 @@ class MindMemory(Base):
 
 
 class ChatMessage(Base):
+    """One line of a project's chat thread.
+
+    `thread_id` is the project the line belongs to, and `user_id` is who said it.
+    The thread used to be keyed by the video instead, which let two projects
+    share a history: the editor's thread id was `video?.id || projectId`, so a
+    session that had uploaded a take wrote under the video while a session that
+    had not wrote under the project, and whichever project was open read both.
+    Rows written before this column existed keep `thread_id` as NULL and are
+    simply never matched again.
+    """
+
     __tablename__ = "chat_messages"
 
     id = Column(String, primary_key=True, index=True)
     user_id = Column(String, nullable=True, index=True)
-    video_id = Column(String, nullable=True, index=True)
+    thread_id = Column(String, nullable=True, index=True)
     role = Column(String, nullable=False)  # "you", "mind"
     text = Column(Text, nullable=False)
     created_at = Column(BigInteger, nullable=False, default=lambda: int(time.time() * 1000))

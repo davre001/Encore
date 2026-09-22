@@ -212,8 +212,21 @@ async def check_post(
 
     stats = youtube.stats(clip, post, user_id=user_id)
     views = int(stats.get("views", 0) if isinstance(stats, dict) else stats)
-    check = analytics.build_post_check(clip, post_id, views)
     post_url = post.get("postUrl") or clip.get("postUrl")
+
+    # A post checked while it is still fresh reads ~0 views, which grades as a
+    # flop. That verdict is not merely a wrong label on screen: it is fed to the
+    # playbook below, so a hook style got marked as failed seconds after going
+    # live. Until the post is old enough to have a meaningful count, report the
+    # pending state and leave the stored verdict, analytics, project and playbook
+    # untouched.
+    now = storage.now_ms()
+    if analytics.too_early(post.get("createdAt"), now):
+        pending = analytics.build_pending_check(clip, post_id, views, now - int(post["createdAt"]))
+        storage.update_post(post_id, {"views": views, "postUrl": post_url, "checkedAt": now})
+        return PostCheck.model_validate(pending)
+
+    check = analytics.build_post_check(clip, post_id, views)
     storage.update_post(
         post_id,
         {

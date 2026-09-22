@@ -303,19 +303,19 @@ def delete_persistent_memory(memory_id: str, user_id: Optional[str] = None) -> b
 
 
 def get_chat_history(
-    video_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
     user_id: Optional[str] = None,
     limit: int = 30,
 ) -> list[dict]:
-    """Retrieve chat history from PostgreSQL."""
+    """Retrieve one project thread's chat history from PostgreSQL."""
     try:
         from ..db import SessionLocal
         from ..models.user import ChatMessage
 
         with SessionLocal() as db:
             query = db.query(ChatMessage)
-            if video_id:
-                query = query.filter(ChatMessage.video_id == video_id)
+            if thread_id:
+                query = query.filter(ChatMessage.thread_id == thread_id)
             if user_id:
                 query = query.filter(ChatMessage.user_id == user_id)
             rows = query.order_by(ChatMessage.created_at.desc()).limit(limit).all()
@@ -326,7 +326,7 @@ def get_chat_history(
                     "role": r.role,
                     "text": r.text,
                     "createdAt": r.created_at,
-                    "videoId": r.video_id,
+                    "threadId": r.thread_id,
                     "userId": r.user_id,
                 }
                 for r in rows
@@ -338,10 +338,10 @@ def get_chat_history(
 def save_chat_message(
     role: str,
     text: str,
-    video_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> dict:
-    """Save a chat message to PostgreSQL."""
+    """Save a chat message to PostgreSQL, scoped to its project thread."""
     now_ms = int(time.time() * 1000)
     try:
         from ..db import SessionLocal
@@ -351,7 +351,7 @@ def save_chat_message(
             msg = ChatMessage(
                 id=ChatMessage.new_id(),
                 user_id=user_id,
-                video_id=video_id,
+                thread_id=thread_id,
                 role=role,
                 text=text,
                 created_at=now_ms,
@@ -364,7 +364,7 @@ def save_chat_message(
                 "role": msg.role,
                 "text": msg.text,
                 "createdAt": msg.created_at,
-                "videoId": msg.video_id,
+                "threadId": msg.thread_id,
             }
     except Exception:
         return {
@@ -372,7 +372,7 @@ def save_chat_message(
             "role": role,
             "text": text,
             "createdAt": now_ms,
-            "videoId": video_id,
+            "threadId": thread_id,
             "userId": user_id,
         }
 
@@ -519,6 +519,14 @@ def _moment_count_guidance(span: float) -> tuple[int, int, str]:
     return 5, 10, "takes over 2 minutes usually have 5 to 10 strong moments"
 
 
+def _clamp_score(value: object) -> float:
+    """Normalize a model-supplied 0-100 strength rating; 0 when absent/unusable."""
+    try:
+        return round(max(0.0, min(100.0, float(value))), 1)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def propose_moments(transcript: list[dict], span: float) -> Optional[list[dict]]:
     """Ask the Mind for standalone beats given a transcript."""
     if not available() or not transcript:
@@ -545,8 +553,11 @@ def propose_moments(transcript: list[dict], span: float) -> Optional[list[dict]]
         f"Count guidance: {count_note}. Aim for {min_moments} to {max_moments} moments "
         "when the dialogue supports it, but return fewer if only fewer sections are strong. "
         "Do not invent topics or split the take evenly. "
+        "Rate each moment's standalone strength from 0 to 100 — how well it hooks a "
+        "cold viewer and lands on its own — reserving 85+ for genuinely strong beats. "
+        "Return them ordered strongest first. "
         "For each moment, format as JSON: "
-        '[{"start": number, "end": number, "label": "string", "reason": "string"}]'
+        '[{"start": number, "end": number, "label": "string", "score": number, "reason": "string"}]'
     )
     data = _complete_json(prompt, timeout_s=INLINE_TIMEOUT, alias=moments_alias, want=list)
     if not isinstance(data, list):
@@ -565,8 +576,11 @@ def propose_moments(transcript: list[dict], span: float) -> Optional[list[dict]]
                     "end": end,
                     "label": str(item.get("label", "Moment")),
                     "reason": str(item.get("reason", "")),
+                    "score": _clamp_score(item.get("score")),
                 }
             )
+    # Best-first so callers taking the first N get the strongest beats.
+    out.sort(key=lambda row: row["score"], reverse=True)
     return out or None
 
 

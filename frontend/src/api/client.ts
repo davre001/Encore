@@ -192,6 +192,19 @@ export async function listClips(videoId: string): Promise<Clip[]> {
   return handleResponse<Clip[]>(res);
 }
 
+/** Regenerate one cut's title, description, hashtags, and tags. */
+export async function rewriteClip(
+  clipId: string,
+  source?: { label?: string; reason?: string }
+): Promise<Clip> {
+  const res = await fetch(`${API}/clips/${encodeURIComponent(clipId)}/rewrite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...userHeaders() },
+    body: JSON.stringify(source ?? {}),
+  });
+  return handleResponse<Clip>(res);
+}
+
 /** Re-render a clip on disk with ffmpeg. */
 export async function renderClip(clipId: string): Promise<Clip> {
   const res = await fetch(
@@ -309,45 +322,51 @@ export async function disconnectYouTube(): Promise<YouTubeStatus> {
   return handleResponse<YouTubeStatus>(res);
 }
 
-/** List all notebook messages for a video. */
-export async function listMessages(videoId: string): Promise<Message[]> {
-  const res = await fetch(`${API}/messages/${encodeURIComponent(videoId)}`, {
+/** List one project's chat thread. */
+export async function listMessages(threadId: string): Promise<Message[]> {
+  const res = await fetch(`${API}/messages/${encodeURIComponent(threadId)}`, {
     headers: userHeaders(),
   });
   return handleResponse<Message[]>(res);
 }
 export const getMessages = listMessages;
 
-/** Send a chat message to the Mind. */
+/** Send a chat message to the Mind.
+ *
+ * Goes straight to the API, not through the Next dev proxy. That proxy gives
+ * up at 30s and answers "Internal Server Error" while the Mind is still
+ * writing — which is what turned a slow reply into
+ * "Failed to reach Encore Mind: API Error 500".
+ */
 export async function sendMessage(
-  videoId: string,
+  threadId: string,
   text: string
 ): Promise<Message> {
-  const res = await fetch(`${API}/messages`, {
+  const res = await fetch(`${BACKEND}/api/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...userHeaders() },
-    body: JSON.stringify({ videoId, text }),
+    body: JSON.stringify({ threadId, text }),
   });
   return handleResponse<Message>(res);
 }
 
-/** Persist an editor event into the AI chat/memory thread. */
+/** Persist an editor event into the project's chat/memory thread. */
 export async function saveEditorEvent(
-  videoId: string,
+  threadId: string,
   text: string,
   role: "mind" | "you" = "mind"
 ): Promise<Message> {
   const res = await fetch(`${API}/messages/events`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...userHeaders() },
-    body: JSON.stringify({ videoId, text, role }),
+    body: JSON.stringify({ threadId, text, role }),
   });
   return handleResponse<Message>(res);
 }
 
-/** Poll notebook history until the Mind's reply lands, or give up (null). */
+/** Poll a project thread until the Mind's reply lands, or give up (null). */
 export async function waitForMindReply(
-  videoId: string,
+  threadId: string,
   since: number,
   opts: { timeoutMs?: number; intervalMs?: number } = {}
 ): Promise<Message | null> {
@@ -358,7 +377,7 @@ export async function waitForMindReply(
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
     try {
-      const history = await listMessages(videoId);
+      const history = await listMessages(threadId);
       const replies = history.filter(
         (m) => m.role === "mind" && m.createdAt >= since
       );

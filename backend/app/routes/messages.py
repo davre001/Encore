@@ -1,4 +1,9 @@
-"""Messages - notebook chat, per-user isolated."""
+"""Messages - project chat threads, per-user isolated.
+
+A thread belongs to a project and to nobody else: `/api/messages/{threadId}` with
+a project id reads that project's chat and nothing else, so opening a new project
+always opens an empty conversation.
+"""
 
 import logging
 from typing import Optional
@@ -14,13 +19,13 @@ router = APIRouter()
 log = logging.getLogger("encore.messages")
 
 
-@router.get("/{video_id}", response_model=list[Message])
+@router.get("/{thread_id}", response_model=list[Message])
 async def list_messages(
-    video_id: str,
+    thread_id: str,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> list[Message]:
-    """Return the persistent chat history for a video, scoped to this user."""
-    history = _merged_history(video_id, user_id)
+    """Return the chat history of one project, scoped to this user."""
+    history = _merged_history(thread_id, user_id)
     return [Message.model_validate(m) for m in history]
 
 
@@ -33,7 +38,7 @@ async def save_editor_event(
     saved = minds.save_chat_message(
         role=body.role,
         text=body.text,
-        video_id=body.video_id,
+        thread_id=body.thread_id,
         user_id=user_id,
     )
     storage.save_message({**saved, "userId": user_id})
@@ -46,22 +51,29 @@ async def send_message(
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Message:
     """Send a message and return the AI response with memory-informed context."""
+    thread_id = body.thread_id
     user_msg = minds.save_chat_message(
         role="you",
         text=body.text,
-        video_id=body.video_id,
+        thread_id=thread_id,
         user_id=user_id,
     )
     storage.save_message({**user_msg, "userId": user_id})
 
-    latest = _latest_check(body.video_id, user_id)
-    context_parts = [_editor_context(body.video_id, user_id)]
+    # The thread is the project, but everything worth telling the Mind about —
+    # the take, its moments, its cuts, its posts — hangs off the video. Without
+    # this hop the Mind would answer every question about a project that, as far
+    # as it could see, had no video at all.
+    video_id = _video_for_thread(thread_id)
+
+    latest = _latest_check(video_id, user_id)
+    context_parts = [_editor_context(video_id, user_id)]
     if latest:
         context_parts.append(f"Latest post check: {latest['verdict']} at {latest['views']:,} views.")
     context = "\n".join(part for part in context_parts if part)
 
     memories = minds.get_persistent_memories(user_id)
-    history = _merged_history(body.video_id, user_id)
+    history = _merged_history(thread_id, user_id)
     reply_text: Optional[str] = None
 
     if gemini.available():
@@ -84,25 +96,35 @@ async def send_message(
             reply_text = minds.chat_reply(
                 text=body.text,
                 context=context,
-                video_id=body.video_id,
+                video_id=video_id,
                 user_id=user_id,
             )
 
-    return Message.model_validate(_save_reply(reply_text, body.video_id, user_id))
+    return Message.model_validate(_save_reply(reply_text, thread_id, user_id))
 
 
-def _save_reply(text: str, video_id: str, user_id: Optional[str]) -> dict:
+def _save_reply(text: str, thread_id: str, user_id: Optional[str]) -> dict:
     mind_msg = minds.save_chat_message(
-        role="mind", text=text, video_id=video_id, user_id=user_id
+        role="mind", text=text, thread_id=thread_id, user_id=user_id
     )
     storage.save_message({**mind_msg, "userId": user_id})
     return mind_msg
 
 
-def _merged_history(video_id: str, user_id: Optional[str]) -> list[dict]:
+def _video_for_thread(thread_id: str) -> str:
+    """The video behind a project thread, for building the Mind's context.
+
+    Falls back to the thread id itself so the diagnostic `/api/mind/chat` route
+    and the pre-project thread still resolve to something harmless.
+    """
+    project = storage.get_project(thread_id)
+    return (project or {}).get("videoId") or thread_id
+
+
+def _merged_history(thread_id: str, user_id: Optional[str]) -> list[dict]:
     rows: list[dict] = []
-    rows.extend(storage.list_messages(video_id))
-    rows.extend(minds.get_chat_history(video_id=video_id, user_id=user_id, limit=50))
+    rows.extend(storage.list_messages(thread_id))
+    rows.extend(minds.get_chat_history(thread_id=thread_id, user_id=user_id, limit=50))
 
     out: list[dict] = []
     seen: set[tuple[str, str, int]] = set()
@@ -145,6 +167,28 @@ def _editor_context(video_id: str, user_id: Optional[str]) -> str:
             + ("Auto approve" if mode == "auto" else "Ask every time")
             + "."
         )
+        # The thread is a reply channel, not a status feed. Left to itself the
+        # model volunteered reports and next steps nobody asked for — "Best cut
+        # ready: … Say 'add captions' to subtitle it, or 'post it' to publish" —
+        # which the creator has to read and dismiss every time a step finishes.
+        lines.append(
+            "Reply only to what the creator's message asks. Do not volunteer status, "
+            "summaries of what the editor has done, suggestions, or offers to do "
+            "something next: the editor reports its own progress in the UI. Do not "
+            "mention moments, cuts, captions, publishing or view counts unless the "
+            "creator's message is about them. A greeting or a thank-you gets one "
+            "short line back, not a report."
+        )
+        if mode == "auto":
+            # Auto approve means the editor acts on its own, so the Mind must not
+            # hand the work back. Without this the model offered to export cuts
+            # that had already been published, and asked permission it already had.
+            lines.append(
+                "Auto approve is ON: the editor accepts the strongest moments, cuts "
+                "them and publishes the best one by itself. Never ask the creator to "
+                "confirm or approve anything, and never offer to do something that is "
+                "already handled."
+            )
     if moments:
         pending = sum(1 for item in moments if item.get("status") == "pending")
         kept = sum(1 for item in moments if item.get("status") == "accepted")
@@ -162,18 +206,33 @@ def _editor_context(video_id: str, user_id: Optional[str]) -> str:
     else:
         lines.append("Moments: none currently loaded.")
     if clips:
-        lines.append(f"Cuts: {len(clips)} created.")
+        live = [clip for clip in clips if clip.get("posted")]
+        lines.append(f"Cuts: {len(clips)} created, {len(live)} already on YouTube.")
         for clip in clips[:8]:
             hashtags = " ".join(clip.get("hashtags") or [])
+            # State each cut's publish status inline. The old context listed cuts
+            # with no posted flag, so a live cut was indistinguishable from a
+            # draft and the Mind kept offering to upload work that was already up.
+            if clip.get("posted"):
+                where = clip.get("postUrl") or "a live YouTube post"
+                status = f"ALREADY PUBLISHED to YouTube at {where}"
+            else:
+                status = "not published yet"
             lines.append(
                 "- Cut: "
                 f"{float(clip.get('start') or 0):.1f}-{float(clip.get('end') or 0):.1f}s, "
-                f"{clip.get('title', 'Untitled')}. Hashtags: {hashtags or 'none'}."
+                f"{clip.get('title', 'Untitled')} [{status}]. Hashtags: {hashtags or 'none'}."
             )
     else:
         lines.append("Cuts: none created yet.")
     if posts:
-        lines.append(f"Posts: {len(posts)} published/exported records.")
+        published = ", ".join(
+            str(post.get("postUrl") or post.get("postId") or "post")
+            for post in posts[-5:]
+        )
+        lines.append(
+            f"Posts: {len(posts)} published. Do not offer to publish these again: {published}."
+        )
     return "\n".join(lines)
 
 

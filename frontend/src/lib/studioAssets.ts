@@ -1,4 +1,4 @@
-import type { Clip, Moment, PostCheck, Video } from "@/types";
+import type { AnalysisStatus, Clip, Moment, PostCheck, Video } from "@/types";
 
 export type MediaFilter =
   | "all"
@@ -174,6 +174,36 @@ export const WORKFLOW_STEPS = [
 ] as const;
 
 export type WorkflowIndex = 0 | 1 | 2 | 3;
+
+/**
+ * Human label for the analysis stage the backend actually reports, so the
+ * workflow chip tracks the real job (transcribing, watching, …) instead of
+ * sitting on a static step name for the whole run.
+ */
+export function analysisStageLabel(stage: AnalysisStatus["stage"]): string {
+  switch (stage) {
+    case "queued":
+      return "Queued";
+    case "uploaded":
+      return "Uploaded";
+    case "thinking":
+      return "Preparing";
+    case "transcribing":
+      return "Transcribing";
+    case "watching":
+      return "Watching for beats";
+    case "generating":
+      return "Writing cuts";
+    case "complete":
+      return "Beats found";
+    case "empty":
+      return "No beats";
+    case "error":
+      return "Analysis failed";
+    default:
+      return "Watch";
+  }
+}
 
 export function workflowIndex(input: {
   video: Video | null;

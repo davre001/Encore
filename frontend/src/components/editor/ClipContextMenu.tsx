@@ -171,7 +171,7 @@ export default function ClipContextMenu({
           ],
           [
             { action: "regen-caption", label: "Regenerate caption", Icon: Captions },
-            { action: "rerun-analysis", label: "Re-run analysis", Icon: RefreshCw },
+            { action: "rerun-analysis", label: "Re-analyze", Icon: RefreshCw },
           ],
         ];
 

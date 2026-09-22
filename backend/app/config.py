@@ -66,6 +66,12 @@ FALLBACK_DURATION = 184.0
 # Mirrors ANALYTICS_MEDIAN in src/lib/mockAnalytics.ts.
 ANALYTICS_MEDIAN = 4100
 
+# How long a post must be live before its view count is allowed to mean anything.
+# A Short checked seconds after upload always reads 0 views, which grades as a
+# flop — and that verdict was fed to the playbook, teaching the AI that a hook
+# style had failed moments after it went up. Override with VERDICT_MIN_AGE_HOURS.
+VERDICT_MIN_AGE_MS = int(float(os.getenv("VERDICT_MIN_AGE_HOURS", "6")) * 60 * 60 * 1000)
+
 # --- Server ----------------------------------------------------------------
 # Bind address for `python -m app`. Default port 5000 (override via env or the
 # uvicorn CLI's --port). uvicorn --port always wins when launched that way.

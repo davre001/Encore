@@ -7,27 +7,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from ..dependencies import get_user_id
+from pydantic import BaseModel
+
 from ..models.schemas import Clip, ClipCreate, ClipUpdate
 from .. import storage
 from ..services import captions, ffmpeg
 
 router = APIRouter()
 
-DEMO_LABELS = {"Confession hook", "Talking-head tip", "Exam-panic rant"}
-LEGACY_FALLBACK_REASONS = {"Detected from the video's spoken transcript."}
 
+class RewriteBody(BaseModel):
+    """Optional beat to write the new title, description, and hashtags from."""
 
-def _from_demo_moment(clip: dict) -> bool:
-    moment_id = clip.get("momentId")
-    moment = storage.get_moment(moment_id) if moment_id else None
-    return bool(
-        moment
-        and (
-            moment.get("label") in DEMO_LABELS
-            or moment.get("reason") in LEGACY_FALLBACK_REASONS
-        )
-    )
-
+    label: Optional[str] = None
+    reason: Optional[str] = None
 
 @router.get("/{video_id}", response_model=list[Clip])
 async def list_clips(
@@ -37,8 +30,47 @@ async def list_clips(
     clips = storage.list_clips(video_id)
     if user_id:
         clips = [c for c in clips if c.get("userId") == user_id or not c.get("userId")]
-    clips = [c for c in clips if not _from_demo_moment(c)]
     return [Clip.model_validate(c) for c in clips]
+
+
+@router.post("/{clip_id}/rewrite", response_model=Clip)
+async def rewrite_clip(
+    clip_id: str,
+    body: RewriteBody | None = None,
+    user_id: Optional[str] = Depends(get_user_id),
+) -> Clip:
+    """Regenerate the post title, description, hashtags, and tags for one cut."""
+    record = storage.get_clip(clip_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if user_id and record.get("userId") and record["userId"] != user_id:
+        raise HTTPException(status_code=404, detail="clip not found")
+    if record.get("posted"):
+        raise HTTPException(status_code=409, detail="cannot rewrite a posted clip")
+
+    moment = storage.get_moment(record["momentId"]) if record.get("momentId") else None
+    source = dict(moment or {})
+    if body and body.label:
+        source["label"] = body.label
+    if body and body.reason:
+        source["reason"] = body.reason
+    source.setdefault("label", record.get("title") or "Moment")
+    source.setdefault("start", record.get("start") or 0)
+    source.setdefault("end", record.get("end") or 0)
+
+    copy = captions.build_post_copy(source)
+    updated = storage.update_clip(
+        clip_id,
+        {
+            "title": copy["title"],
+            "caption": copy["caption"],
+            "hashtags": copy["hashtags"],
+            "tags": copy["tags"],
+        },
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="clip not found")
+    return Clip.model_validate(updated)
 
 
 @router.post("/{clip_id}/render", response_model=Clip)

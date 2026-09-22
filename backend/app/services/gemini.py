@@ -586,6 +586,14 @@ def propose_caption_segments(
     return out or None
 
 
+def _clamp_score(value: object) -> float:
+    """Normalize a model-supplied 0-100 strength rating; 0 when absent/unusable."""
+    try:
+        return round(max(0.0, min(100.0, float(value))), 1)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _normalize_moment_rows(rows: object, span: float) -> Optional[list[dict]]:
     if not isinstance(rows, list):
         return None
@@ -615,8 +623,11 @@ def _normalize_moment_rows(rows: object, span: float) -> Optional[list[dict]]:
                 "reason": str(
                     item.get("reason") or "Detected by watching the uploaded video."
                 ).strip()[:240],
+                "score": _clamp_score(item.get("score")),
             }
         )
+    # Best-first so callers that take the first N get the strongest beats.
+    out.sort(key=lambda row: row["score"], reverse=True)
     return out or None
 
 
@@ -658,8 +669,13 @@ def propose_video_moments(
         "fewer sections are genuinely strong. Use exact timestamps from the video and "
         "keep moments tight enough for a short-form edit.\n"
         f"{transcript_context}\n"
+        "Rate each moment's standalone strength from 0 to 100: how well it hooks a "
+        "cold viewer, holds attention, and lands without the rest of the video. Be "
+        "discriminating — reserve 85+ for genuinely strong beats and spread the rest "
+        "lower. Return the moments ordered strongest first.\n"
         "Return only JSON in this shape: "
-        '{"moments":[{"start":0.0,"end":0.0,"label":"short label","reason":"why this exact section hits"}]}'
+        '{"moments":[{"start":0.0,"end":0.0,"label":"short label","score":0,'
+        '"reason":"why this exact section hits"}]}'
     )
     schema = {
         "type": "object",
@@ -672,9 +688,10 @@ def propose_video_moments(
                         "start": {"type": "number"},
                         "end": {"type": "number"},
                         "label": {"type": "string"},
+                        "score": {"type": "number"},
                         "reason": {"type": "string"},
                     },
-                    "required": ["start", "end", "label", "reason"],
+                    "required": ["start", "end", "label", "score", "reason"],
                 },
             }
         },
@@ -710,9 +727,10 @@ def propose_moments(transcript: list[dict], span: float) -> Optional[list[dict]]
                         "start": {"type": "number"},
                         "end": {"type": "number"},
                         "label": {"type": "string"},
+                        "score": {"type": "number"},
                         "reason": {"type": "string"},
                     },
-                    "required": ["start", "end", "label", "reason"],
+                    "required": ["start", "end", "label", "score", "reason"],
                 },
             }
         },
@@ -725,7 +743,12 @@ def propose_moments(transcript: list[dict], span: float) -> Optional[list[dict]]
         "when the transcript supports it, but return fewer if only fewer sections are strong.\n"
         f"{lines}\n\n"
         "Use only the transcript timing. Do not invent topics. Pick moments that "
-        "can stand alone as short clips, with a clear label and concrete reason."
+        "can stand alone as short clips, with a clear label and concrete reason.\n"
+        "Rate each moment's standalone strength from 0 to 100: how well it hooks a "
+        "cold viewer and lands without the rest of the video. Be discriminating — "
+        "reserve 85+ for genuinely strong beats. Return them ordered strongest first.\n"
+        "Format as JSON: "
+        '{"moments":[{"start":0.0,"end":0.0,"label":"string","score":0,"reason":"string"}]}'
     )
     data = _generate_json(prompt, schema, timeout_s=60.0)
     rows = data.get("moments") if isinstance(data, dict) else None

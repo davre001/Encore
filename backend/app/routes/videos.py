@@ -1,8 +1,10 @@
 """Video upload + fetch routes."""
 
+import errno
 import glob
 import mimetypes
 import os
+import shutil
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
@@ -53,17 +55,9 @@ def _save_video_record(
     record["userId"] = user_id
     storage.save_video(record)
     _status(video.id, "uploaded", "Upload complete. Preparing analysis.")
-
-    storage.save_message(
-        {
-            "id": storage.new_id("msg"),
-            "role": "mind",
-            "text": "I am preparing the video, reading the audio, and looking for beats that stand alone.",
-            "createdAt": storage.now_ms(),
-            "videoId": video.id,
-            "userId": user_id,
-        }
-    )
+    # Analysis progress belongs on the status the editor polls, not in the chat.
+    # A mind line here was written with nobody having asked, and it is the same
+    # class of leak as a "Kept …" confirmation after a click.
 
     background_tasks.add_task(_propose_moments, video.id, src_path, duration)
     return video
@@ -150,8 +144,22 @@ async def append_upload_chunk(
     chunk = await request.body()
     if not chunk:
         raise HTTPException(status_code=400, detail="Upload chunk was empty.")
-    with open(part_path, "ab") as out:
-        out.write(chunk)
+    free = shutil.disk_usage(os.path.dirname(part_path)).free
+    if free < len(chunk) + 64 * 1024 * 1024:
+        raise HTTPException(
+            status_code=507,
+            detail="The disk is full, so this video could not be saved. Free some space and try again.",
+        )
+    try:
+        with open(part_path, "ab") as out:
+            out.write(chunk)
+    except OSError as exc:
+        if exc.errno == errno.ENOSPC:
+            raise HTTPException(
+                status_code=507,
+                detail="The disk is full, so this video could not be saved. Free some space and try again.",
+            ) from exc
+        raise
     return {"ok": True, "size": os.path.getsize(part_path)}
 
 
@@ -231,16 +239,6 @@ async def retry_analysis(
 
     storage.save_moments(video_id, [])
     _status(video_id, "queued", "Regenerating moments from the video.")
-    storage.save_message(
-        {
-            "id": storage.new_id("msg"),
-            "role": "mind",
-            "text": "Regenerating moments from the video.",
-            "createdAt": storage.now_ms(),
-            "videoId": video_id,
-            "userId": user_id,
-        }
-    )
     background_tasks.add_task(
         _propose_moments,
         video_id,

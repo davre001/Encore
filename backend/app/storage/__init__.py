@@ -295,20 +295,20 @@ def update_post(post_id: str, patch: dict) -> Optional[dict]:
 
 
 # --- messages --------------------------------------------------------------
-# Message records carry an extra `videoId` for filtering; the Message schema
+# Message records carry an extra `threadId` for filtering; the Message schema
 # omits it, so it never leaks into the API response.
 def save_message(message: dict) -> dict:
     return _insert("messages", message)
 
 
-def list_messages(video_id: str) -> list[dict]:
-    return _list_by("messages", "videoId", video_id)
+def list_messages(thread_id: str) -> list[dict]:
+    return _list_by("messages", "threadId", thread_id)
 
 
-def clear_messages(video_id: str) -> None:
+def clear_messages(thread_id: str) -> None:
     with _LOCK:
         rows = _read("messages")
-        new_rows = [r for r in rows if r.get("videoId") != video_id]
+        new_rows = [r for r in rows if r.get("threadId") != thread_id]
         _write("messages", new_rows)
 
 

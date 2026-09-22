@@ -8,12 +8,15 @@ round-trip cleanly with the TypeScript types and a future wired client.
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic.alias_generators import to_camel
 
 Decision = Literal["accept", "reject"]
 MomentStatus = Literal["pending", "accepted", "rejected"]
 Verdict = Literal["hit", "mid", "flop"]
+# A check result, not a stored grade: "pending" marks a post too young to judge.
+# Stored verdicts stay hit/mid/flop — nothing writes "pending" to a post row.
+CheckVerdict = Literal["hit", "mid", "flop", "pending"]
 Role = Literal["mind", "you"]
 CaptionLanguage = Literal["en", "fr", "es", "pt", "de", "it", "ar", "hi"]
 AnalysisStage = Literal[
@@ -53,6 +56,20 @@ class Moment(CamelModel):
     label: str
     reason: str
     status: MomentStatus = "pending"
+    # How strongly this beat stands alone, 0-100, as judged by the detector.
+    # Drives best-first ordering and "pick the best cut" selection; older rows
+    # written before this field existed default to 0 and keep their time order.
+    score: float = 0.0
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def _coerce_score(cls, value: object) -> float:
+        """Tolerate a missing, null or out-of-range score on stored rows rather
+        than rejecting the whole list — one bad row must not empty the tab."""
+        try:
+            return max(0.0, min(100.0, float(value)))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0.0
 
 
 class AnalysisStatus(CamelModel):
@@ -85,7 +102,7 @@ class PostCheck(CamelModel):
     clip_id: str
     views: int
     median: int
-    verdict: Verdict
+    verdict: CheckVerdict
     note: str
     recut_hook: Optional[str] = None
 
@@ -107,12 +124,15 @@ class MomentDecision(CamelModel):
 
 
 class MessageCreate(CamelModel):
-    video_id: str
+    # The project whose thread this message belongs to. One thread per project:
+    # a chat started in one project can never surface in another, and a project
+    # that has just been created starts with nothing to read.
+    thread_id: str
     text: str
 
 
 class MessageEventCreate(CamelModel):
-    video_id: str
+    thread_id: str
     text: str
     role: Role = "mind"
 

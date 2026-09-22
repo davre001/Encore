@@ -30,6 +30,7 @@ os.environ["MINDS_BUILDER_API_KEY"] = ""
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
+from app import storage  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -359,16 +360,30 @@ def main() -> int:
         )
 
         # 4. moments (background task has run by now) --------------------------
+        # Detection is AI-driven now, so the count and labels vary per run and a
+        # hermetic offline run may legitimately find nothing. Assert the contract
+        # and the invariants that must hold whenever moments do come back.
         moments = client.get(f"/api/moments/{vid}").json()
-        check("3 moments proposed", len(moments) == 3, str(len(moments)))
+        check("moments endpoint returns a list", isinstance(moments, list), str(moments))
         if moments:
             m0 = moments[0]
             check("moment has camelCase videoId", "videoId" in m0, str(m0.keys()))
             check("moment status pending", m0.get("status") == "pending")
+            check("moment carries a score", "score" in m0, str(m0.keys()))
+            # Regression guard: the detector labels beats with the creator's own
+            # playbook styles, so a label filter once hid every real moment and
+            # left the Moments tab empty. Anything stored must come back.
+            stored = storage.list_moments(vid)
             check(
-                "first beat is Confession hook",
-                m0.get("label") == "Confession hook",
-                str(m0.get("label")),
+                "no moment is hidden by its label",
+                len(moments) == len(stored),
+                f"returned {len(moments)} of {len(stored)}",
+            )
+            scores = [float(m.get("score", 0)) for m in moments]
+            check(
+                "moments are ordered best-first",
+                scores == sorted(scores, reverse=True),
+                str(scores),
             )
 
         # 5. seeded message ----------------------------------------------------
@@ -468,7 +483,7 @@ def main() -> int:
         check("verdict hit", pc.get("verdict") == "hit", str(pc.get("verdict")))
 
         # 10. chat fallbacks ---------------------------------------------------
-        r_check = client.post("/api/messages", json={"videoId": vid, "text": "check the flop?"}).json()
+        r_check = client.post("/api/messages", json={"threadId": vid, "text": "check the flop?"}).json()
         check("chat reply is a mind message", r_check.get("role") == "mind")
         check(
             "flop/check reply reports latest verdict",
@@ -476,7 +491,7 @@ def main() -> int:
             str(r_check.get("text")),
         )
 
-        r_left = client.post("/api/messages", json={"videoId": vid, "text": "any leftover?"}).json()
+        r_left = client.post("/api/messages", json={"threadId": vid, "text": "any leftover?"}).json()
         check(
             "leftover reply claims no invented leftovers",
             "leftovers" in str(r_left.get("text", "")).lower()
@@ -484,7 +499,7 @@ def main() -> int:
             str(r_left.get("text")),
         )
 
-        r_def = client.post("/api/messages", json={"videoId": vid, "text": "hello there"}).json()
+        r_def = client.post("/api/messages", json={"threadId": vid, "text": "hello there"}).json()
         check(
             "default reply is the notebook line",
             "on the notebook" in str(r_def.get("text", "")),

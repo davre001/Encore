@@ -18,7 +18,14 @@ def _round1(value: float) -> float:
     return int(value * 10 + 0.5) / 10
 
 
-def _moment(video_id: str, start: float, end: float, label: str, reason: str) -> dict:
+def _moment(
+    video_id: str,
+    start: float,
+    end: float,
+    label: str,
+    reason: str,
+    score: float = 0.0,
+) -> dict:
     return {
         "id": storage.new_id("mom"),
         "videoId": video_id,
@@ -27,7 +34,17 @@ def _moment(video_id: str, start: float, end: float, label: str, reason: str) ->
         "label": label,
         "reason": reason,
         "status": "pending",
+        "score": _round1(max(0.0, min(100.0, float(score or 0.0)))),
     }
+
+
+def _ranked(moments: list[dict]) -> list[dict]:
+    """Order beats best-first so downstream `slice(0, n)` picks the best, not the first.
+
+    Stable: when every score ties (a detector that returned no scores, or the
+    neutral transcript fallback) the detector's own time order is preserved.
+    """
+    return sorted(moments, key=lambda item: item.get("score", 0.0), reverse=True)
 
 
 def _from_transcript_chunks(video_id: str, transcript: list[dict], span: float) -> list[dict]:
@@ -88,10 +105,19 @@ def find_moments(
     if src_path and gemini.available():
         proposed = gemini.propose_video_moments(src_path, transcript, span)
     if proposed:
-        return [
-            _moment(video_id, item["start"], item["end"], item["label"], item["reason"])
-            for item in proposed
-        ]
+        return _ranked(
+            [
+                _moment(
+                    video_id,
+                    item["start"],
+                    item["end"],
+                    item["label"],
+                    item["reason"],
+                    item.get("score", 0.0),
+                )
+                for item in proposed
+            ]
+        )
 
     if not transcript or not minds.is_meaningful_speech(transcript):
         return []
@@ -100,9 +126,18 @@ def find_moments(
     if not proposed and minds.available():
         proposed = minds.propose_moments(transcript, span)
     if proposed:
-        return [
-            _moment(video_id, item["start"], item["end"], item["label"], item["reason"])
-            for item in proposed
-        ]
+        return _ranked(
+            [
+                _moment(
+                    video_id,
+                    item["start"],
+                    item["end"],
+                    item["label"],
+                    item["reason"],
+                    item.get("score", 0.0),
+                )
+                for item in proposed
+            ]
+        )
 
     return []

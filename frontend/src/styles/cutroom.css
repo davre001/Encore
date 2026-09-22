@@ -68,6 +68,36 @@
   min-width: 0;
 }
 
+.cut__slate-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.cut__rename {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.3rem;
+  background: none;
+  color: var(--mute);
+  cursor: pointer;
+}
+
+.cut__rename:hover {
+  color: var(--paper);
+}
+
+.cut__rename svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
 .cut__project {
   font-family: var(--font-display);
   font-size: 0.98rem;
@@ -356,6 +386,41 @@
   color: var(--mute);
   font-size: 0.8rem;
   line-height: 1.5;
+}
+
+.cut__moments-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.cut__retry {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--cut-copper);
+  cursor: pointer;
+}
+
+.cut__retry:hover:not(:disabled) {
+  color: var(--cut-flame, #f0a36a);
+}
+
+.cut__retry:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.cut__retry svg {
+  width: 0.95rem;
+  height: 0.95rem;
 }
 
 /* Drop zone for the long take */
@@ -766,6 +831,19 @@
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
+}
+
+/* Links the Mind replies with (e.g. the YouTube URL after publishing). The
+   bubble is pre-wrap, so a long URL would otherwise overflow the panel. */
+.cut__link {
+  color: var(--cut-copper);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.cut__link:hover {
+  color: var(--text);
 }
 
 .cut__thinking {

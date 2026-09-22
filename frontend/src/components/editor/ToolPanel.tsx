@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowUp, Play, Square, X } from "lucide-react";
+import { ArrowUp, Play, RefreshCw, Square, X } from "lucide-react";
 import type {
   AnalysisStatus,
   CaptionLanguage,
@@ -13,6 +13,37 @@ import type {
 } from "@/types";
 import type { ToolId } from "@/components/editor/ToolRail";
 import { formatSpan, formatTime } from "@/lib/timecode";
+
+// A URL in a bubble, kept out of the match when the sentence ends in a full
+// stop: the trailing character class refuses . , ; : ! ? so "watch it: <url>."
+// does not swallow the punctuation into the link.
+const LINK_PATTERN = /(https?:\/\/[^\s<>()]*[^\s<>().,;:!?])/g;
+
+/** Render a chat line with its links clickable.
+ *
+ * Encore replies with the YouTube URL when it publishes, and bubbles used to
+ * render text only — so the link was dead text to copy by hand. Links open in
+ * a new tab on purpose: navigating the current one would drop the editor and
+ * any unsaved take state. split() with a capture group puts the matches at odd
+ * indices, which is what distinguishes them from the surrounding prose.
+ */
+function linkify(text: string) {
+  return text.split(LINK_PATTERN).map((part, index) =>
+    index % 2 === 1 ? (
+      <a
+        key={index}
+        className="cut__link"
+        href={part}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {part}
+      </a>
+    ) : (
+      part
+    ),
+  );
+}
 
 type ToolPanelProps = {
   tool: ToolId;
@@ -44,6 +75,7 @@ type ToolPanelProps = {
   onRecut: (id: string) => void;
   onDecideMoment: (id: string, decision: "accept" | "reject") => void;
   onToolChange?: (tool: ToolId) => void;
+  onReanalyze?: () => void;
 };
 
 const HEADINGS: Record<ToolId, string> = {
@@ -173,6 +205,14 @@ export default function ToolPanel(props: ToolPanelProps) {
   const selectedCaptionTrack = selectedClip
     ? props.captionTracks.find((track) => track.clipId === selectedClip.id)
     : null;
+  // The loader is shared by every tab. While it is on screen it is the status,
+  // so the idle line each tab showed before a take existed ("Drop a long take…",
+  // "Upload a long take first", "Nothing to show yet", "Pick a cut…") must not
+  // sit underneath it.
+  const panelLoading =
+    busy ||
+    (!!props.analysisStatus && !props.analysisStatus.done) ||
+    !!props.actionProgress;
 
   const pendingMoments = props.moments.filter((m) => m.status === "pending");
   const count =
@@ -220,6 +260,40 @@ export default function ToolPanel(props: ToolPanelProps) {
       </header>
 
       <div className="cut__panel-body">
+        {/* Progress belongs to the panel, not to the chat thread. It reports what
+            the editor itself is doing, and those jobs are exactly the ones that
+            move the panel off Mind — cutting and publishing both select another
+            tab — so while it lived inside the thread the loader disappeared at
+            the very moment there was something to wait for. */}
+        {/* While analysis is actually running, the bar follows the polled backend
+            stage (message + a percent derived from that stage) so it tallies with
+            the real job. actionProgress is only for the phases the backend cannot
+            report, e.g. cutting, captioning, publishing. */}
+        {props.analysisStatus && !props.analysisStatus.done ? (
+          <div className="cut__chat-progress" aria-live="polite">
+            <div className="cut__chat-progress-top">
+              <span>{props.analysisStatus.message}</span>
+              <b>{ANALYSIS_PROGRESS[props.analysisStatus.stage]}%</b>
+            </div>
+            <span className="cut__chat-progress-track">
+              <i
+                style={{
+                  width: `${ANALYSIS_PROGRESS[props.analysisStatus.stage]}%`,
+                }}
+              />
+            </span>
+          </div>
+        ) : props.actionProgress ? (
+          <div className="cut__chat-progress" aria-live="polite">
+            <div className="cut__chat-progress-top">
+              <span>{props.actionProgress.label}</span>
+              <b>{props.actionProgress.percent}%</b>
+            </div>
+            <span className="cut__chat-progress-track">
+              <i style={{ width: `${props.actionProgress.percent}%` }} />
+            </span>
+          </div>
+        ) : null}
         {/* ---- Take: the source long video ---- */}
         {tool === "take" ? (
           video ? (
@@ -238,7 +312,7 @@ export default function ToolPanel(props: ToolPanelProps) {
                 </button>
               </div>
             </div>
-          ) : (
+          ) : panelLoading ? null : (
             <p className="cut__hint">
               Drop a long take on the monitor to begin.
             </p>
@@ -247,17 +321,31 @@ export default function ToolPanel(props: ToolPanelProps) {
 
         {/* ---- Moments: standout beats proposed by Encore ---- */}
         {tool === "moments" ? (
-          busy ? (
-            <p className="cut__hint">{props.analysisStatus?.message ?? "Preparing the video for analysis."}</p>
-          ) : props.moments.length === 0 ? (
+          props.moments.length === 0 ? (
+            panelLoading ? null : (
             <p className="cut__hint">
               {props.analysisStatus?.stage === "error" ? props.analysisStatus.message : props.analysisStatus?.message && video ? props.analysisStatus.message : video ? "No moments detected yet. Analysis updates will appear here as the video is processed." : "Upload a long take first. Encore will find the beats that stand alone."}
             </p>
+            )
           ) : (
             <>
-              <p className="cut__hint" style={{ marginBottom: "0.2rem" }}>
-                Review each beat. Keep it to turn it into a cut with captions, or Skip.
-              </p>
+              <div className="cut__moments-head">
+                <p className="cut__hint" style={{ margin: 0 }}>
+                  Review each beat. Keep it to turn it into a cut with captions, or Skip.
+                </p>
+                {props.onReanalyze ? (
+                  <button
+                    type="button"
+                    className="cut__retry"
+                    aria-label="Re-analyze"
+                    title="Re-analyze"
+                    disabled={props.regeneratingMoments || busy}
+                    onClick={props.onReanalyze}
+                  >
+                    <RefreshCw aria-hidden="true" />
+                  </button>
+                ) : null}
+              </div>
               {props.moments.map((moment) => (
                 <div
                   key={moment.id}
@@ -341,9 +429,8 @@ export default function ToolPanel(props: ToolPanelProps) {
 
         {/* ---- Cuts: the cuts Encore made from the beats it found ---- */}
         {tool === "cuts" ? (
-          busy ? (
-            <p className="cut__hint">Reading the tape and cutting the beats…</p>
-          ) : clips.length === 0 ? (
+          clips.length === 0 ? (
+            panelLoading ? null : (
             pendingMoments.length > 0 ? (
               <div className="cut__hint" style={{ display: "grid", gap: "0.5rem" }}>
                 <p>
@@ -364,6 +451,7 @@ export default function ToolPanel(props: ToolPanelProps) {
             ) : (
               <p className="cut__hint">Nothing to show yet</p>
             )
+          )
           ) : (
             clips.map((clip) => (
               <div
@@ -433,9 +521,11 @@ export default function ToolPanel(props: ToolPanelProps) {
         {/* ---- Captions: post copy plus on-video timed text layers ---- */}
         {tool === "caption" ? (
           !selectedClip ? (
+            panelLoading ? null : (
             <p className="cut__hint">
               Pick a cut on the timeline and its captions open here.
             </p>
+            )
           ) : (
             <>
               <div className="cut__field">
@@ -605,38 +695,13 @@ export default function ToolPanel(props: ToolPanelProps) {
                   className={`cut__bubble cut__bubble--${message.role}`}
                 >
                   <b>{message.role === "mind" ? "Encore" : "You"}</b>
-                  {message.text}
+                  {linkify(message.text)}
                 </p>
               ))}
               {props.chatBusy ? (
                 <p className="cut__thinking" aria-live="polite">
                   Thinking...
                 </p>
-              ) : null}
-              {props.actionProgress ? (
-                <div className="cut__chat-progress" aria-live="polite">
-                  <div className="cut__chat-progress-top">
-                    <span>{props.actionProgress.label}</span>
-                    <b>{props.actionProgress.percent}%</b>
-                  </div>
-                  <span className="cut__chat-progress-track">
-                    <i style={{ width: `${props.actionProgress.percent}%` }} />
-                  </span>
-                </div>
-              ) : props.regeneratingMoments && props.analysisStatus ? (
-                <div className="cut__chat-progress" aria-live="polite">
-                  <div className="cut__chat-progress-top">
-                    <span>{props.analysisStatus.message}</span>
-                    <b>{ANALYSIS_PROGRESS[props.analysisStatus.stage]}%</b>
-                  </div>
-                  <span className="cut__chat-progress-track">
-                    <i
-                      style={{
-                        width: `${ANALYSIS_PROGRESS[props.analysisStatus.stage]}%`,
-                      }}
-                    />
-                  </span>
-                </div>
               ) : null}
             </div>
             <form

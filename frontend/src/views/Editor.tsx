@@ -8,7 +8,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { Plus } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 import EditorActions, {
   type ExportTarget,
 } from "@/components/editor/EditorActions";
@@ -30,10 +30,11 @@ import type {
   Message,
   Moment,
   PostCheck,
+  ProjectState,
   TakeSegment,
   Video,
 } from "@/types";
-import { WORKFLOW_STEPS, workflowIndex } from "@/lib/studioAssets";
+import { WORKFLOW_STEPS, analysisStageLabel, workflowIndex } from "@/lib/studioAssets";
 import * as api from "@/api/client";
 import { extractFrames, extractPeaks, type Frame } from "@/lib/mediaGraphics";
 import { formatTime } from "@/lib/timecode";
@@ -55,6 +56,84 @@ function mindMessage(text: string): Message {
 
 function youMessage(text: string): Message {
   return { id: uid("msg"), role: "you", text, createdAt: Date.now() };
+}
+
+/** Thread for a chat typed before this session has a project to belong to.
+ *
+ * Opening /editor cold is the normal way to start: there is no project row yet,
+ * so there is no thread yet either. The Mind still answers — and the reply is
+ * filed under here — but nothing ever loads this thread back, which is what
+ * keeps a fresh editor from opening on somebody else's conversation. */
+const PRE_PROJECT_THREAD = "notebook";
+
+const UNPROMPTED_MIND_LINES = new Set([
+  "I am preparing the video, reading the audio, and looking for beats that stand alone.",
+  "Regenerating moments from the video.",
+  "This browser cannot list installed fonts. Showing web-safe fonts.",
+  "Font permission was not granted, so Encore kept the default font list.",
+  "Put the playhead inside the clip to split it.",
+  "Move the playhead inside the main take to split it.",
+  "Move the playhead further into the take before trimming the left side.",
+  "Move the playhead earlier in the take before trimming the right side.",
+  "Move the playhead further into the selected take segment before trimming left.",
+  "Move the playhead earlier in the selected take segment before trimming right.",
+  "Not enough tape left here to cut a clip.",
+  "Drag the highlighted edges of the take on the timeline to trim its in and out points.",
+  "That cut is live — recut it to change the hook.",
+]);
+
+/** Lines the editor used to write on its own, with nobody having typed in Mind.
+ *
+ * A Keep/Skip, a trim that couldn't run, a font-list failure — the panel or the
+ * control already shows the outcome, and these were filed into the thread
+ * anyway, then reloaded with the project. The posted-link reply is not in here:
+ * that one is the notice the creator asked to keep. */
+function isUnpromptedChatLine(message: Message): boolean {
+  const text = message.text.trim();
+  if (message.role === "you") {
+    return /^Export ".+" to device$/.test(text) || /^Share “.+” to YouTube$/.test(text);
+  }
+  if (message.role !== "mind") return false;
+  if (UNPROMPTED_MIND_LINES.has(text)) return true;
+  return (
+    /^Kept “.+”\. Cut created in Cuts\.$/.test(text) ||
+    /^Skipped “.+”\.$/.test(text) ||
+    /^Failed to (accept|reject) moment:/.test(text) ||
+    /^Upload failed:/.test(text) ||
+    /^Couldn't remove /.test(text) ||
+    /^“.+” is already live\. Recut it to ship a new open\.$/.test(text)
+  );
+}
+
+/** Union of a server thread and the messages already on screen, oldest first.
+ *
+ * Only ever used when the server's copy is the *same* thread that is already
+ * open; the loader replaces outright when the project changes. Within one
+ * thread a bare replace still loses things: the "Posted … watch it here: <url>"
+ * line is pushed the moment YouTube answers, and a reload that replaced the list
+ * would wipe the only copy of the link off the screen. `ensureProject` is what
+ * makes merging the right answer here — it guarantees that line was written
+ * under the very thread the loader goes on to read.
+ *
+ * The server is authoritative, so its rows are kept verbatim — including a
+ * genuine repeat of the same text. A local message is only dropped when the
+ * server already holds that same role+text, which is the expected case for a
+ * message that was pushed optimistically and has since been persisted. Matching
+ * on the timestamp as well would not work: the server stamps its own
+ * `int(time.time() * 1000)`, so the two copies never agree on a value.
+ * Unprompted editor lines are dropped from both sides, so a "Kept …" that was
+ * already saved does not come back when the project reopens.
+ */
+function mergeHistory(local: Message[], server: Message[]): Message[] {
+  const kept = server.filter((message) => !isUnpromptedChatLine(message));
+  const onServer = new Set(kept.map((message) => `${message.role}|${message.text}`));
+  const out = [...kept];
+  for (const message of local) {
+    if (isUnpromptedChatLine(message)) continue;
+    if (onServer.has(`${message.role}|${message.text}`)) continue;
+    out.push(message);
+  }
+  return out.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
 }
 
 function stampNow() {
@@ -187,12 +266,32 @@ function parseCutCommand(text: string): { start: number; end: number } | null {
 }
 
 function isPublishPrompt(text: string) {
+  const lower = text.trim().toLowerCase().replace(/[.!?]+$/, "");
+  if (lower === "/publish" || lower === "/post") return true;
+  if (/^(please\s+)?(post|publish|upload|share)( it| this| that)?$/.test(lower)) return true;
+  // "publish my cut" never used to match, because the old check demanded the
+  // word YouTube. Naming a cut, a clip, or YouTube is enough.
+  return (
+    /\b(post|publish|upload|share)\b/.test(lower) &&
+    /\b(youtube|short|shorts|cut|clip)\b/.test(lower)
+  );
+}
+
+/** The creator asked to find or rank beats, not only to post a cut they already have. */
+function asksToBuildBeforePosting(text: string) {
   const lower = text.trim().toLowerCase();
   return (
-    lower === "/publish" ||
-    lower === "/post" ||
-    /\b(post|publish|upload|share)\b.*\byoutube\b/.test(lower)
+    /\b(best|strongest)\b/.test(lower) ||
+    /\b(create|make|find|detect|accept|keep|load)\b.*\b(moment|moments|beat|beats)\b/.test(lower)
   );
+}
+
+function isYes(text: string) {
+  return /^(yes|yeah|yep|yup|do it|go ahead|ok|okay|sure|confirm)\b/i.test(text.trim());
+}
+
+function isNo(text: string) {
+  return /^(no|nope|don't|dont|cancel|stop)\b/i.test(text.trim());
 }
 
 function isCreateMomentsPrompt(text: string) {
@@ -210,12 +309,43 @@ function isCaptionPrompt(text: string) {
   return lower === "/captions" || /\b(add|create|generate|make)\b.*\b(caption|captions|subtitles|cc)\b/.test(lower);
 }
 
+/** Whether a chat message actually names subtitles.
+ *
+ * The verb-free check matters for post requests: "post it to YouTube" and "post
+ * it with captions" both route to the same action, and only the second one wants
+ * a caption layer. Matching the noun alone is what tells them apart.
+ */
+function asksForCaptions(text: string) {
+  return /\b(caption|captions|subtitles|cc)\b/i.test(text);
+}
+
 function wantsFullAutoPost(text: string) {
   const lower = text.trim().toLowerCase();
   return (
     isPublishPrompt(text) ||
     /\b(create|make|cut|load|accept|keep)\b.*\b(moment|moments|cut|cuts|clip|clips)\b.*\b(post|publish|upload|share)\b/.test(lower) ||
     /\b(post|publish|upload|share)\b.*\b(best|strongest)\b.*\b(moment|cut|clip)\b/.test(lower)
+  );
+}
+
+/** Whether a chat message is asking to pick interrupted work back up.
+ *
+ * This has to be caught before the generic chat fallback. "Continue" used to be
+ * handed straight to the Mind, which had no way to act on it: it read the
+ * context, answered "Processing the remaining 3 moments", and no code ran at
+ * all. Resuming is a control command like /permissions, so the editor handles it
+ * itself rather than asking a language model to describe work it cannot start.
+ *
+ * Anchored to the start of the message so a passing "continue" mid-sentence
+ * ("then continue cutting from 12s") still reaches the ordinary routing.
+ */
+function isResumePrompt(text: string) {
+  const lower = text.trim().toLowerCase().replace(/[.!?]+$/, "");
+  return (
+    lower === "/resume" ||
+    lower === "/continue" ||
+    /^(resume|continue|carry on|keep going|go on|pick up)\b/.test(lower) ||
+    /^where (were we|did we|are we)\b/.test(lower)
   );
 }
 
@@ -279,11 +409,9 @@ export default function Editor() {
   // be posted; anything in here gets its edits PATCHed at publish time.
   const serverClipIds = useRef<Set<string>>(new Set<string>());
   const [checks, setChecks] = useState<PostCheck[]>([]);
-  const [messages, setMessages] = useState<Message[]>([
-    mindMessage(
-      "Drop a long take. I’ll find the beats that stand alone and cut each one for you — captioned and ready to ship.",
-    ),
-  ]);
+  // Starts empty. The thread answers what the creator asked, so an opening line
+  // nobody prompted is the first thing that rule has to silence.
+  const [messages, setMessages] = useState<Message[]>([]);
 
   const [tool, setTool] = useState<ToolId>("take");
   const [panelOpen, setPanelOpen] = useState(true);
@@ -291,6 +419,9 @@ export default function Editor() {
   const [prompt, setPrompt] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [regeneratingMoments, setRegeneratingMoments] = useState(false);
+  // Progress for work the backend cannot report (cutting, captioning,
+  // publishing). Analysis phases come from analysisStatus instead, and every
+  // action clears this in a finally so a finished bar never lingers on screen.
   const [actionProgress, setActionProgress] = useState<{ label: string; percent: number } | null>(null);
   const [stamp, setStamp] = useState("");
 
@@ -312,6 +443,9 @@ export default function Editor() {
   const [trimPulse, setTrimPulse] = useState(false);
   const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
   const [selectedCaptionTrackId, setSelectedCaptionTrackId] = useState<string | null>(null);
+  // What Delete acts on. A take, a cut, and a text layer can all be "selected"
+  // at once, and the last one the user clicked is the only one Delete removes.
+  const [selection, setSelection] = useState<"take" | "clip" | "caption" | null>(null);
   const [fontChoices, setFontChoices] = useState<string[]>([
     "Inter",
     "Arial",
@@ -359,7 +493,29 @@ export default function Editor() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const isInitialLoad = useRef(true);
+  // Bumped when a load is abandoned (the creator imported a video before the
+  // saved project arrived). A late response must not paint over that new take.
+  const projectLoadToken = useRef(0);
+  const projectIdRef = useRef<string | null>(null);
   const resumePlayhead = useRef<number | null>(null);
+  // Which project the messages on screen came from, so the loader can tell a
+  // reload of the current thread (merge) from a move to another one (replace).
+  const openThread = useRef<string | null>(null);
+  // Manual mode asked before running the auto-approve pipeline. The next reply
+  // is yes or no to that question, not a new instruction.
+  const pendingManualConfirm = useRef<string | null>(null);
+
+  /** The chat thread this session talks into: the project, and only the project.
+   *
+   * Keying the thread by anything else is what let projects mix. It used to be
+   * `video?.id || projectId || "notebook"`, so a project that had a take wrote
+   * under the video while one that did not wrote under the project, a re-cut
+   * kept writing into the thread of the project it was cut from, and the loader
+   * merged whatever came back into whatever was already on screen. One project,
+   * one thread — and a project that has just been created reads an empty one.
+   */
+  const threadId = projectId ?? PRE_PROJECT_THREAD;
+  projectIdRef.current = projectId;
   // Posted/verdict state persisted onto the project so History can tell a draft
   // apart from a posted hit / mid / flop and resume the right one.
   const [projectStatus, setProjectStatus] =
@@ -381,10 +537,11 @@ export default function Editor() {
     }
 
     let mounted = true;
+    const token = ++projectLoadToken.current;
     api
       .getProject(qProject)
       .then((proj) => {
-        if (!mounted || !proj) return;
+        if (!mounted || !proj || token !== projectLoadToken.current) return;
         setProjectId(proj.id);
         setProjectName(proj.name || "Untitled");
         if (proj.takeIn !== undefined) setTakeIn(proj.takeIn);
@@ -455,7 +612,7 @@ export default function Editor() {
         setProjectName("Untitled");
       })
       .finally(() => {
-        if (mounted) {
+        if (mounted && token === projectLoadToken.current) {
           window.setTimeout(() => {
             isInitialLoad.current = false;
           }, 600);
@@ -466,6 +623,86 @@ export default function Editor() {
       mounted = false;
     };
   }, []);
+
+  /** The project row for the state on screen, minus its id.
+   *
+   * One builder for every writer — auto-save, the first save of a new project,
+   * and publishing — because when they disagreed a project could be stored with
+   * the wrong clips, or with no video at all.
+   *
+   * `overrides` is spread last so a caller can swap in what it knows better:
+   * publishing passes the clips it has just marked posted, plus the outcome
+   * fields that only exist once YouTube has answered.
+   */
+  function projectPayload(overrides: Partial<ProjectState> = {}) {
+    return {
+      name: projectName || "Untitled Take",
+      videoId: video?.id || null,
+      mediaUrl: persistableMediaUrl(video?.id, mediaUrl),
+      playhead: time,
+      status: projectStatus,
+      verdict: projectVerdict ?? undefined,
+      views: projectViews ?? undefined,
+      postUrl: projectPostUrl ?? undefined,
+      postId: projectPostId ?? undefined,
+      takeIn,
+      takeOut,
+      takeSegments,
+      clips,
+      effects: {
+        rotate: previewRotate,
+        flip: previewFlip,
+        aspect,
+        aiOn,
+        aiPermissionMode,
+        compareOn,
+        captionTracks,
+      },
+      ...overrides,
+    };
+  }
+
+  /** Make sure this session has a project row, and return its id.
+   *
+   * The chat thread is the project, so a write that lands before the project
+   * exists is filed under the pre-project key and disappears from the thread the
+   * moment a real id arrives and the loader swaps to it — which is exactly how
+   * the "Posted … watch it here" link got lost. Uploading and publishing both
+   * call this first.
+   *
+   * `overrides` exists for the upload path, which calls this the instant the
+   * server returns a video id that the state above has not rendered yet.
+   */
+  async function ensureProject(
+    overrides: Partial<ProjectState> = {},
+  ): Promise<string | null> {
+    const existingId = projectIdRef.current;
+    if (existingId) {
+      // A project created from chat has no video yet. The first upload has to
+      // write its name and video onto that row, or the title stays "Untitled"
+      // and a later reload shows the old name next to the new take.
+      if (Object.keys(overrides).length > 0) {
+        await api.updateProject(existingId, overrides).catch(() => null);
+      }
+      return existingId;
+    }
+    try {
+      const saved = await api.saveProject(projectPayload(overrides));
+      if (!saved?.id) return null;
+      projectIdRef.current = saved.id;
+      setProjectId(saved.id);
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        url.searchParams.set("project", saved.id);
+        window.history.replaceState({}, "", url.toString());
+      }
+      return saved.id;
+    } catch {
+      // Publishing and uploading both carry on: a project that could not be
+      // saved yet is one the debounced auto-save will try again.
+      return null;
+    }
+  }
 
   // Auto-save project whenever take segments, clips, or effect options change
   useEffect(() => {
@@ -478,33 +715,7 @@ export default function Editor() {
     setSaveStatus("saving");
     const timer = window.setTimeout(async () => {
       try {
-        const payload = {
-          id: projectId || undefined,
-          name: projectName || "Untitled Take",
-          videoId: video?.id || null,
-          mediaUrl: persistableMediaUrl(video?.id, mediaUrl),
-          playhead: time,
-          status: projectStatus,
-          verdict: projectVerdict ?? undefined,
-          views: projectViews ?? undefined,
-          postUrl: projectPostUrl ?? undefined,
-          postId: projectPostId ?? undefined,
-          takeIn,
-          takeOut,
-          takeSegments,
-          clips,
-          effects: {
-            rotate: previewRotate,
-            flip: previewFlip,
-            aspect,
-            aiOn,
-            aiPermissionMode,
-            compareOn,
-            captionTracks,
-          },
-        };
-
-        const res = await api.saveProject(payload);
+        const res = await api.saveProject({ id: projectId || undefined, ...projectPayload() });
         if (res && res.id && res.id !== projectId) {
           setProjectId(res.id);
           // Update URL without full reload so refresh preserves the project
@@ -604,12 +815,13 @@ export default function Editor() {
   const pushMind = useCallback((text: string, persist = true) => {
     setMessages((prev) => [...prev, mindMessage(text)]);
     if (!persist) return;
-    const targetId = video?.id || projectId || "notebook";
-    void api.saveEditorEvent(targetId, text).catch(() => {});
-  }, [projectId, video?.id]);
+    void api.saveEditorEvent(threadId, text).catch(() => {});
+  }, [threadId]);
 
   async function setPermissionMode(mode: AiPermissionMode, announce = false) {
     setAiPermissionMode(mode);
+    // Persist every change so the stored mode can never drift away from what the
+    // toolbar shows — a stale stored value is what used to flip this back.
     await api.updateAiSettings(mode).catch(() => null);
     if (announce) {
       pushMind(
@@ -623,19 +835,24 @@ export default function Editor() {
     }
   }
 
-  async function resolvePermissionMode() {
-    try {
-      const settings = await api.getAiSettings();
-      setAiPermissionMode(settings.aiPermissionMode);
-      return settings.aiPermissionMode;
-    } catch {
-      return aiPermissionMode;
-    }
-  }
-
   /* ---- Take ---- */
 
   async function handleUpload(file: File) {
+    const importedName = stem(file.name) || "Untitled";
+    // The saved project had not finished opening, so this import is a new
+    // project. Applying the late load afterwards is what put the old take on
+    // the timeline under the new file's name.
+    if (isInitialLoad.current) {
+      projectLoadToken.current += 1;
+      isInitialLoad.current = false;
+      projectIdRef.current = null;
+      setProjectId(null);
+      if (typeof window !== "undefined") {
+        const next = new URL(window.location.href);
+        next.searchParams.delete("project");
+        window.history.replaceState({}, "", next.toString());
+      }
+    }
     setBusy(true);
     setAnalysisStatus({
       videoId: "pending",
@@ -696,12 +913,13 @@ export default function Editor() {
     setSelectedTakeId(initialTake.id);
     setTakeIn(0);
     setTakeOut(probed);
-    setProjectName(stem(file.name));
-    setMessages((prev) => [
-      ...prev,
-      youMessage(`Uploaded ${file.name}`),
-      mindMessage("Uploading video and detecting standout moments…"),
-    ]);
+    setProjectName(importedName);
+    setSelection("take");
+    // Nothing is said here. An upload is a file being handed over, not a
+    // question: "Uploaded take.mp4" was the creator's own line put in their
+    // mouth by the editor, and "Uploading video and detecting standout moments…"
+    // was the AI narrating a job the progress bar already reports. The panel
+    // switches to Moments by itself when the beats land.
     setTool("moments");
 
     try {
@@ -718,6 +936,17 @@ export default function Editor() {
       if (nextVideo.duration > 0) {
         setTakeOut(nextVideo.duration);
       }
+
+      // Give the take a project of its own now that it has a video, so the
+      // thread below belongs to this project and not to whatever was open
+      // before. Deferring it to the debounced auto-save left a window where
+      // analysis-time messages were filed under the pre-project key and then
+      // vanished when the project id landed.
+      await ensureProject({
+        name: importedName,
+        videoId: nextVideo.id,
+        mediaUrl: api.videoFileUrl(nextVideo.id),
+      });
 
       // 2. Poll for moments (propose_moments runs in a FastAPI background task).
       // Real Whisper on a genuinely long take can run well past a minute, so
@@ -758,25 +987,25 @@ export default function Editor() {
       setBusy(false);
 
       if (foundMoments.length > 0) {
-        const mode = await resolvePermissionMode();
-        if (mode === "auto") {
-          setActionProgress({ label: "Creating cuts from regenerated moments", percent: 72 });
+        // Use the mode the toolbar is showing. Re-reading it from the server here
+        // is what used to silently flip "Ask every time" back to auto-approve.
+        if (aiPermissionMode === "auto") {
+          // No label here, and no chat line per accept. autoApproveMoments moves
+          // the progress loader itself; a percent set before it would only jump
+          // backwards.
           await autoApproveMoments(foundMoments);
-        } else {
-          pushMind(
-            `Found ${foundMoments.length} standout moments. Review each beat: click Keep to turn it into a clip, or Skip.`,
-          );
         }
+        // Ask mode announces nothing on purpose. The panel has already switched
+        // to Moments with Keep and Skip sitting on every beat, and that is the
+        // prompt — a chat line restating it is noise nobody asked for.
       } else {
         const finalStatus =
           latestStatus?.done
             ? latestStatus
             : await api.getAnalysisStatus(nextVideo.id).catch(() => null);
         if (finalStatus) setAnalysisStatus(finalStatus);
-        pushMind(
-          finalStatus?.message ??
-            "Processed the tape, but no standout moments surfaced. You can also cut clips manually from the take.",
-        );
+        // Silent for the same reason: the status line already reports that no
+        // moments surfaced, so this was the same sentence in two places.
       }
     } catch (err: any) {
       setBusy(false);
@@ -788,7 +1017,8 @@ export default function Editor() {
         updatedAt: Date.now(),
         done: true,
       });
-      pushMind(`Upload failed: ${err.message || err}`);
+      // The status line already says the upload failed. A chat line here is the
+      // editor talking about a job nobody asked it to narrate.
     }
   }
 
@@ -811,39 +1041,64 @@ export default function Editor() {
             setSelectedClipId(newClip.id);
           }
         }
-        pushMind(`Kept “${updated.label}”. Cut created in Cuts.`);
-      } else {
-        pushMind(`Skipped “${updated.label}”.`);
       }
-    } catch (err: any) {
-      pushMind(`Failed to ${decision} moment: ${err.message || err}`);
+      // No chat line. Keep and Skip are buttons, not a prompt, and the Moments
+      // row already flips to Kept / Skipped (and "Cut created in Cuts"). Writing
+      // it here is what put “Kept “…”. Cut created in Cuts.” in the thread.
+    } catch {
+      // Leave the row as it was. A failed decision stays pending, which is the
+      // signal to try again — not a message in Mind.
     }
   }
 
+  /** Strongest first — the detector scores each beat 0-100; unranked rows keep order. */
+  function rankMoments(candidates: Moment[]): Moment[] {
+    return [...candidates].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  }
+
+  /**
+   * The best cut to act on: prefer a draft over an already-posted clip, then the
+   * highest-scoring moment behind it. Previously this was just the first match,
+   * which made "prepare the best cut" pick whatever happened to be earliest.
+   */
+  function pickBestClip(candidateClips: Clip[], candidateMoments: Moment[]): Clip | null {
+    const scoreFor = (clip: Clip) =>
+      candidateMoments.find((moment) => moment.id === clip.momentId)?.score ?? 0;
+    const ranked = [...candidateClips].sort((a, b) => {
+      if (a.posted !== b.posted) return a.posted ? 1 : -1;
+      return scoreFor(b) - scoreFor(a);
+    });
+    return ranked[0] ?? null;
+  }
+
   async function autoApproveMoments(nextMoments: Moment[]) {
-    const pending = nextMoments.filter((moment) => moment.status === "pending").slice(0, 3);
+    const pending = rankMoments(
+      nextMoments.filter((moment) => moment.status === "pending"),
+    ).slice(0, 3);
     if (!pending.length) return;
     setBusy(true);
 
     try {
-      pushMind(
-        `Auto approve is on.\n\nAccepting the ${pending.length} strongest moment${
-          pending.length === 1 ? "" : "s"
-        }, creating cuts, drafting copy, adding captions, and preparing the best one to post.`,
-      );
-
       let nextClips: Clip[] = [];
       const acceptedMoments: Moment[] = [];
+      let index = 0;
       for (const moment of pending) {
+        index += 1;
+        // Name the beat being cut and count through the batch. This path makes
+        // no other report, so the loader is the only place the creator can see
+        // which of several accepts is running — and, if the run dies partway,
+        // how far it actually got before it stopped.
+        setActionProgress({
+          label: `Cutting “${moment.label}” (${index} of ${pending.length})`,
+          percent: 60 + Math.round(((index - 1) / pending.length) * 24),
+        });
         const updated = await api.decideMoment(moment.id, "accept");
         acceptedMoments.push(updated);
-        setMoments((prev) => prev.map((m) => (m.id === moment.id ? updated : m)));
       }
       if (acceptedMoments.length) {
         setMoments((prev) =>
           prev.map(
-            (moment) =>
-              acceptedMoments.find((item) => item.id === moment.id) ?? moment,
+            (moment) => acceptedMoments.find((item) => item.id === moment.id) ?? moment,
           ),
         );
       }
@@ -855,25 +1110,22 @@ export default function Editor() {
         serverClipIds.current = new Set(nextClips.map((clip) => clip.id));
       }
 
-      const bestClip =
-        nextClips.find((clip) => pending.some((moment) => moment.id === clip.momentId)) ??
-        nextClips.find((clip) => !clip.posted) ??
-        null;
+      const bestClip = pickBestClip(nextClips, nextMoments);
       if (!bestClip) return;
 
       setSelectedClipId(bestClip.id);
-      await generateCaptionTrackForRange({
-        clipId: bestClip.id,
-        title: bestClip.title,
-        caption: bestClip.caption,
-        start: bestClip.start,
-        end: bestClip.end,
-        language: "en",
-      });
-      await shipToYouTube(bestClip);
       setTool("cuts");
+      // Auto approve carries the beat all the way through: accept the strongest
+      // moments, cut them, and publish the best one.
+      //
+      // This path says nothing else in the chat. Its whole report is the posted
+      // notification (with the link to watch) and the verdict that follows it;
+      // the progress loader covers the wait. Captions stay off — auto approve
+      // does not subtitle unless asked.
+      await shipToYouTube(bestClip);
     } finally {
       setBusy(false);
+      setActionProgress(null); // never leave a finished bar on screen
     }
   }
 
@@ -893,12 +1145,16 @@ export default function Editor() {
     setPreviewRotate(0);
     setPreviewFlip(false);
     setAiPermissionMode("ask");
+    // Persist it too: resetting local state alone left the stored mode on
+    // "auto", and the next upload read that stale value straight back.
+    void api.updateAiSettings("ask").catch(() => null);
     setCaptionTracks([]);
     setSelectedCaptionTrackId(null);
     setMediaUrl(null);
     setMediaDuration(0);
     setTakeSegments([]);
     setSelectedTakeId(null);
+    projectIdRef.current = null;
     setProjectId(null);
     setSaveStatus("idle");
     setProjectStatus("draft");
@@ -922,9 +1178,7 @@ export default function Editor() {
     setPlaying(false);
     setTool("take");
     setProjectName("Untitled");
-    setMessages([
-      mindMessage("Fresh tape. Drop another long take when you’re ready."),
-    ]);
+    setMessages([]);
   }
 
   function takeStageFile(file: File | undefined) {
@@ -963,9 +1217,8 @@ export default function Editor() {
       setClips((prev) =>
         prev.map((clip) => (clip.id === clipId ? updated : clip)),
       );
-    } catch (err: any) {
+    } catch {
       setClips(previous);
-      pushMind(`Couldn't remove ${hashtag}: ${err.message || err}`);
     }
   }
 
@@ -1018,9 +1271,6 @@ export default function Editor() {
     ]);
     setSelectedCaptionTrackId(nextTrack.id);
     setTool("caption");
-    pushMind(
-      `Added ${CAPTION_LANGUAGE_LABELS[input.language]} captions as timed text layers.`,
-    );
   }
 
   async function handleGenerateCaptions(clipId: string, language: CaptionLanguage) {
@@ -1065,7 +1315,6 @@ export default function Editor() {
     if (typeof window === "undefined") return;
     const queryLocalFonts = (window as any).queryLocalFonts;
     if (typeof queryLocalFonts !== "function") {
-      pushMind("This browser cannot list installed fonts. Showing web-safe fonts.");
       return;
     }
     try {
@@ -1080,10 +1329,9 @@ export default function Editor() {
       names.sort((a, b) => a.localeCompare(b));
       if (names.length > 0) {
         setFontChoices((prev) => Array.from(new Set([...prev, ...names])));
-        pushMind(`Loaded ${names.length} installed fonts.`);
       }
     } catch {
-      pushMind("Font permission was not granted, so Encore kept the default font list.");
+      // Permission denied leaves the web-safe list in place. Not a chat event.
     }
   }
 
@@ -1151,7 +1399,6 @@ export default function Editor() {
     commit(next);
     const movedClip = next.find((c) => c.id === clipId);
     if (movedClip) {
-      pushMind(`Moved “${movedClip.title}” to ${formatTime(nextStart)}.`);
       void api.updateClip(clipId, { start: nextStart, end: nextEnd }).catch(() => {});
     }
   }
@@ -1161,7 +1408,6 @@ export default function Editor() {
     if (!clip) return;
     const at = time;
     if (at <= clip.start + 0.05 || at >= clip.end - 0.05) {
-      pushMind("Put the playhead inside the clip to split it.");
       return;
     }
     const baseTitle = clip.title.replace(/ · part \d+$/i, "");
@@ -1183,7 +1429,6 @@ export default function Editor() {
     };
     commit(clips.flatMap((c) => (c.id === id ? [left, right] : [c])));
     setSelectedClipId(right.id);
-    pushMind(`Split “${clip.title}” into two parts at ${formatTime(at)}.`);
   }
 
   function duplicateClip(id: string) {
@@ -1222,7 +1467,6 @@ export default function Editor() {
     const clip = clips.find((c) => c.id === id);
     if (!clip) return;
     setClipboard({ ...clip });
-    pushMind(`Copied “${clip.title}”.`);
   }
 
   function cutClip(id: string) {
@@ -1254,28 +1498,90 @@ export default function Editor() {
     const clip = clips.find((c) => c.id === id);
     if (!clip) return;
     commit(clips.map((c) => (c.id === id ? { ...c, frozen: !c.frozen } : c)));
-    pushMind(
-      clip.frozen
-        ? `Unfroze “${clip.title}”.`
-        : `Froze “${clip.title}” on its last frame.`,
-    );
   }
 
   function regenCaption(id: string) {
     const clip = clips.find((c) => c.id === id);
     if (!clip) return;
     if (clip.posted) {
-      pushMind("That cut is live — recut it to change the hook.");
       return;
     }
     void handleGenerateCaptions(id, "en");
   }
 
-  function rerunAnalysis(id: string) {
-    const clip = clips.find((c) => c.id === id);
-    if (!clip) return;
-    void handleGenerateCaptions(id, "en");
-    pushMind("Re-ran caption detection from the video's speech.");
+  function momentCovering(clip: Clip, beats: Moment[]): Moment | undefined {
+    return (
+      beats.find((moment) => moment.id === clip.momentId) ??
+      beats.find((moment) => moment.start < clip.end && moment.end > clip.start)
+    );
+  }
+
+  async function reanalyzeTake() {
+    if (!video?.id || busy) return;
+    setTool("moments");
+    setBusy(true);
+    setRegeneratingMoments(true);
+    setMoments([]);
+    setAnalysisStatus({
+      videoId: video.id,
+      stage: "queued",
+      message: "Re-analyzing the take.",
+      updatedAt: Date.now(),
+      done: false,
+    });
+    try {
+      setActionProgress({ label: "Finding moments again", percent: 18 });
+      const started = await api.retryAnalysis(video.id);
+      setAnalysisStatus(started);
+      const { foundMoments, latestStatus } = await pollMomentAnalysis(video.id);
+      setMoments(foundMoments);
+      if (latestStatus) setAnalysisStatus(latestStatus);
+
+      const drafts = clips.filter(
+        (clip) => !clip.posted && serverClipIds.current.has(clip.id),
+      );
+      if (drafts.length > 0) {
+        setActionProgress({
+          label: "Rewriting titles, descriptions, and hashtags",
+          percent: 72,
+        });
+        const rewritten = new Map<string, Clip>();
+        for (const clip of drafts) {
+          const beat = momentCovering(clip, foundMoments);
+          try {
+            const next = await api.rewriteClip(clip.id, {
+              label: beat?.label ?? clip.title,
+              reason: beat?.reason,
+            });
+            rewritten.set(clip.id, next);
+          } catch {
+            /* A posted or missing cut keeps the copy it already has. */
+          }
+        }
+        if (rewritten.size > 0) {
+          setClips((prev) => prev.map((clip) => rewritten.get(clip.id) ?? clip));
+        }
+      }
+      setActionProgress({ label: "Re-analysis complete", percent: 100 });
+      await sleep(1200);
+    } catch (err: any) {
+      setAnalysisStatus({
+        videoId: video.id,
+        stage: "error",
+        message: `Re-analysis failed: ${err.message || err}`,
+        errorType: "network",
+        updatedAt: Date.now(),
+        done: true,
+      });
+    } finally {
+      setBusy(false);
+      setRegeneratingMoments(false);
+      setActionProgress(null);
+    }
+  }
+
+  function rerunAnalysis(_id: string) {
+    void reanalyzeTake();
   }
 
   async function downloadRenderedClip(clip: Clip) {
@@ -1295,9 +1601,9 @@ export default function Editor() {
   function downloadClip(id: string) {
     const clip = clips.find((c) => c.id === id);
     if (clip) {
-      void downloadRenderedClip(clip)
-        .then(() => pushMind(`Downloaded "${clip.title}".`))
-        .catch((err: any) => pushMind(`Download failed: ${err.message || err}`));
+      void downloadRenderedClip(clip).catch((err: any) =>
+        pushMind(`Download failed: ${err.message || err}`),
+      );
       return;
     }
   }
@@ -1318,7 +1624,6 @@ export default function Editor() {
     };
     commit([recut, ...clips]);
     setSelectedClipId(recut.id);
-    pushMind("Recut queued with a story-first open. Export when it feels right.");
   }
 
   /* ---- Take: edit the main clip (the take), not a cut ---- */
@@ -1426,7 +1731,6 @@ export default function Editor() {
       (selectedTakeId ? segments.find((s) => s.id === selectedTakeId) : segments[0]);
 
     if (!targetSeg || atTimeline <= targetSeg.start + 0.05 || atTimeline >= targetSeg.end - 0.05) {
-      pushMind("Move the playhead inside the main take to split it.");
       return;
     }
 
@@ -1464,7 +1768,6 @@ export default function Editor() {
     if (rightSegInAligned) {
       setSelectedTakeId(rightSegInAligned.id);
     }
-    pushMind(`Split main clip at ${formatTime(atTimeline)} and aligned with timeline.`);
   }
 
   function handleSplit() {
@@ -1538,7 +1841,6 @@ export default function Editor() {
         setTakeOut(last.sourceEnd);
       }
 
-      pushMind(`Trimmed “${updatedTarget.title}” and aligned with timeline.`);
       return aligned;
     });
   }
@@ -1594,19 +1896,15 @@ export default function Editor() {
       const currentOut = takeSegments[0]?.sourceEnd ?? (takeOut > 0 ? takeOut : duration);
       if (edge === "left") {
         if (sourceAt <= currentIn + 0.1) {
-          pushMind("Move the playhead further into the take before trimming the left side.");
           return;
         }
         handleTakeTrim(sourceAt, currentOut);
-        pushMind(`Trimmed the left side to ${formatTime(sourceAt)}.`);
         return;
       }
       if (sourceAt >= currentOut - 0.1) {
-        pushMind("Move the playhead earlier in the take before trimming the right side.");
         return;
       }
       handleTakeTrim(currentIn, sourceAt);
-      pushMind(`Trimmed the right side from ${formatTime(sourceAt)}.`);
       return;
     }
 
@@ -1618,11 +1916,9 @@ export default function Editor() {
     const sourceStart = target.sourceStart ?? target.start;
     const sourceEnd = target.sourceEnd ?? target.end;
     if (edge === "left" && sourceAt <= sourceStart + 0.1) {
-      pushMind("Move the playhead further into the selected take segment before trimming left.");
       return;
     }
     if (edge === "right" && sourceAt >= sourceEnd - 0.1) {
-      pushMind("Move the playhead earlier in the selected take segment before trimming right.");
       return;
     }
 
@@ -1642,11 +1938,6 @@ export default function Editor() {
     setSelectedTakeId(target.id);
     setTime(0);
     seek(0);
-    pushMind(
-      edge === "left"
-        ? `Trimmed the selected segment's left side to ${formatTime(sourceAt)}.`
-        : `Trimmed the selected segment's right side from ${formatTime(sourceAt)}.`,
-    );
   }
 
   function getActivePlaybackBounds(currentTime: number): { inPoint: number; outPoint: number } {
@@ -1677,7 +1968,6 @@ export default function Editor() {
     commit([clip, ...clips]);
     setSelectedClipId(clip.id);
     setTool("cuts");
-    pushMind("Duplicated the whole take as a cut.");
   }
 
   function cutTakeAtPlayhead() {
@@ -1686,18 +1976,22 @@ export default function Editor() {
     const start = Math.min(Math.max(time, takeIn), Math.max(takeIn, hi - 1));
     const end = Math.min(start + 15, hi);
     if (end <= start + 0.1) {
-      pushMind("Not enough tape left here to cut a clip.");
       return;
     }
     const clip = makeTakeClip(start, end, "New cut");
     commit([...clips, clip]);
     setSelectedClipId(clip.id);
     setTool("cuts");
-    pushMind(`Cut a ${Math.round(end - start)}s clip from ${Math.round(start)}s.`);
   }
 
-  function deleteTake(takeId?: string | null) {
-    if (!video && duration <= 0) return;
+  function deleteCaptionTrack(trackId: string) {
+    setCaptionTracks((prev) => prev.filter((track) => track.id !== trackId));
+    if (selectedCaptionTrackId === trackId) setSelectedCaptionTrackId(null);
+    if (selection === "caption") setSelection(null);
+  }
+
+  function deleteTakeSegment(takeId?: string | null) {
+    if (!video && takeSegments.length === 0 && duration <= 0) return;
     const targetId = takeId || selectedTakeId;
     if (takeSegments.length > 1 && targetId) {
       rememberTakeEdit();
@@ -1709,20 +2003,43 @@ export default function Editor() {
         seek(0);
         return aligned;
       });
-      pushMind("Deleted take segment. Remaining clips aligned to timeline start.");
       return;
     }
+    // The last video on the timeline. Remove that video only — the project,
+    // its name, and its chat stay. handleReset was clearing all of those.
     rememberTakeEdit();
-    handleReset();
+    setTakeSegments([]);
+    setSelectedTakeId(null);
+    setVideo(null);
+    setMediaUrl(null);
+    setMediaDuration(0);
+    setMoments([]);
+    setAnalysisStatus(null);
+    setFrames([]);
+    setPeaks(null);
+    setTakeIn(0);
+    setTakeOut(0);
+    setTime(0);
+    setPlaying(false);
+    if (selection === "take") setSelection(null);
+  }
+
+  function deleteSelected() {
+    if (selection === "caption" && selectedCaptionTrackId) {
+      deleteCaptionTrack(selectedCaptionTrackId);
+      return;
+    }
+    if (selection === "clip" && selectedClipId) {
+      deleteClip(selectedClipId);
+      return;
+    }
+    deleteTakeSegment(selectedTakeId);
   }
 
   function trimTake() {
     if (!video) return;
     setTrimPulse(true);
     window.setTimeout(() => setTrimPulse(false), 1600);
-    pushMind(
-      "Drag the highlighted edges of the take on the timeline to trim its in and out points.",
-    );
   }
 
   function downloadTake() {
@@ -1733,7 +2050,6 @@ export default function Editor() {
     document.body.appendChild(link);
     link.click();
     link.remove();
-    pushMind("Downloaded the full take.");
   }
 
   function onTakeAction(action: ClipMenuAction) {
@@ -1748,7 +2064,7 @@ export default function Editor() {
         duplicateTake();
         break;
       case "delete":
-        deleteTake();
+        deleteTakeSegment(selectedTakeId);
         break;
       case "download":
         downloadTake();
@@ -1762,11 +2078,13 @@ export default function Editor() {
 
   function openMenu(clipId: string, x: number, y: number) {
     setSelectedClipId(clipId);
+    setSelection("clip");
     setMenu({ kind: "clip", clipId, x, y });
   }
 
   function openTakeMenu(takeId: string | null, x: number, y: number) {
     if (takeId) setSelectedTakeId(takeId);
+    setSelection("take");
     setMenu({ kind: "take", clipId: takeId, x, y });
   }
 
@@ -1826,7 +2144,7 @@ export default function Editor() {
         redo();
         break;
       case "delete":
-        deleteTake();
+        deleteSelected();
         break;
       case "cut":
         handleSplit();
@@ -1906,11 +2224,16 @@ export default function Editor() {
     return created;
   }
 
-  async function shipToYouTube(clip: Clip) {
+  async function shipToYouTube(clip: Clip): Promise<boolean> {
     try {
-      pushMind(`Posting “${clip.title}” to YouTube…`);
+      setActionProgress({ label: `Preparing “${clip.title}”`, percent: 36 });
       const ready = await ensureServerClip(clip);
+      setActionProgress({
+        label: `Publishing “${clip.title}” to YouTube`,
+        percent: 74,
+      });
       const { postId, postUrl } = await api.postClip(ready.id);
+      setActionProgress({ label: `Published “${clip.title}”`, percent: 100 });
       setClips((prev) =>
         prev.map((c) =>
           c.id === clip.id ? { ...ready, posted: true, postId, postUrl } : c,
@@ -1920,10 +2243,15 @@ export default function Editor() {
       setProjectStatus("posted");
       setProjectPostUrl(postUrl);
       setProjectPostId(postId);
-      const postedMessage = `Posted "${clip.title}" to YouTube (${postUrl}). Opening it now.`;
+      const postedMessage = `Posted “${clip.title}” to YouTube. Watch it here: ${postUrl}`;
       pushMind(postedMessage, false);
-      if (video?.id || projectId) {
-        await api.saveEditorEvent(video?.id || projectId || "notebook", postedMessage).catch(() => null);
+      // Create the project first if this session never saved one, then file the
+      // link in its thread. Writing it anywhere else loses it: the loader
+      // replaces the thread the moment a project id arrives, so a line filed
+      // under the pre-project key is gone as soon as the id lands.
+      const thread = projectId ?? (await ensureProject());
+      if (thread) {
+        await api.saveEditorEvent(thread, postedMessage).catch(() => null);
       }
 
       const postedClips = clips.map((c) =>
@@ -1935,98 +2263,65 @@ export default function Editor() {
           postUrl,
           postId,
         };
-        if (projectId) {
-          await api.updateProject(projectId, { ...postedOutcome, clips: postedClips });
-        } else {
-          const saved = await api.saveProject({
-            name: projectName || "Untitled Take",
-            videoId: video?.id || null,
-            mediaUrl: mediaUrl || null,
-            takeIn,
-            takeOut,
-            takeSegments,
-            clips: postedClips,
-            effects: {
-              rotate: previewRotate,
-              flip: previewFlip,
-              aspect,
-              aiOn,
-              aiPermissionMode,
-              compareOn,
-              captionTracks,
-            },
-            ...postedOutcome,
-          });
-          if (saved?.id) setProjectId(saved.id);
+        // `thread` is a real project id by now — ensureProject above created the
+        // row if this session did not have one — so this is always an update of
+        // a project that exists, never the second save of a new one.
+        if (thread) {
+          await api.updateProject(thread, { ...postedOutcome, clips: postedClips });
         }
       } catch {
         /* Backend post verification has already been recorded by /api/posts. */
       }
 
-      if (typeof window !== "undefined") {
-        window.location.assign(postUrl);
-      }
-      await sleep(1800);
+      // No navigation here: publishing must not yank the creator off the
+      // timeline mid-session. The chat reply already carries the link.
+      //
+      // And no grading. A Short reads ~0 views for hours, so checking here used
+      // to always come back "Flop" — telling the creator their hook had failed
+      // seconds after it went up, and feeding that flop to the playbook. The
+      // backend now refuses to grade a fresh post; this stops asking it to and
+      // reports the wait instead.
       const check = await api.checkPost(postId);
       setChecks((prev) => [check, ...prev]);
-      setProjectStatus("checked");
-      setProjectVerdict(check.verdict);
       setProjectViews(check.views);
-      pushMind(
-        check.verdict === "hit"
-          ? `${check.views.toLocaleString()} views. Hit! That hook style goes up in the playbook.`
-          : check.verdict === "flop"
-            ? `${check.views.toLocaleString()} views. Flop. ${check.note}${
-                check.recutHook ? ` Suggestion: ${check.recutHook}` : ""
-              }`
-            : `${check.views.toLocaleString()} views. Mid. ${check.note}`,
-      );
+      // A narrowed local rather than a boolean: it is what keeps "pending" out
+      // of setProjectVerdict and the project's stored verdict field, both of
+      // which only accept a real grade.
+      const verdict = check.verdict === "pending" ? null : check.verdict;
+      if (verdict) {
+        setProjectStatus("checked");
+        setProjectVerdict(verdict);
+      }
+      // Deliberately not announced in the chat, in either branch. A grade lands
+      // seconds or hours after the post went up and nothing the creator typed is
+      // being answered by it — the verdict reaches them through the project, the
+      // Cuts panel and Analytics regardless. Without a verdict the project is
+      // left on "posted" rather than "checked", so History keeps offering
+      // Continue instead of a re-cut for a post that was never judged.
       // Persist immediately so History swaps Continue → Re-cut even if they
       // leave before the debounced auto-save fires.
       try {
         const outcome = {
-          status: "checked" as const,
-          verdict: check.verdict,
+          status: (verdict ? "checked" : "posted") as "checked" | "posted",
+          ...(verdict ? { verdict } : {}),
           views: check.views,
           postUrl,
           postId,
         };
-        if (projectId) {
-          await api.updateProject(projectId, outcome);
-        } else {
-          const saved = await api.saveProject({
-            name: projectName || "Untitled Take",
-            videoId: video?.id || null,
-            mediaUrl: mediaUrl || null,
-            takeIn,
-            takeOut,
-            takeSegments,
-            clips,
-            effects: {
-              rotate: previewRotate,
-              flip: previewFlip,
-              aspect,
-              aiOn,
-              aiPermissionMode,
-              compareOn,
-              captionTracks,
-            },
-            ...outcome,
-          });
-          if (saved?.id) {
-            setProjectId(saved.id);
-            if (typeof window !== "undefined") {
-              const next = new URL(window.location.href);
-              next.searchParams.set("project", saved.id);
-              window.history.replaceState({}, "", next.toString());
-            }
-          }
+        if (thread) {
+          await api.updateProject(thread, outcome);
         }
       } catch {
         /* auto-save still has the new fields in its deps */
       }
+      // Hold 100% long enough to paint. Clearing in the same turn as the post
+      // returns is why the bar never looked finished — it jumped off 92 (or
+      // 100) before the browser drew the last frame.
+      await sleep(1400);
+      return true;
     } catch (err: any) {
       pushMind(`Publish failed: ${err.message || err}`);
+      return false;
     }
   }
 
@@ -2037,25 +2332,17 @@ export default function Editor() {
     setExporting(target);
 
     if (target === "device") {
-      setMessages((prev) => [
-        ...prev,
-        youMessage(`Export "${clip.title}" to device`),
-      ]);
       try {
         await downloadRenderedClip(clip);
-        pushMind(`Saved "${clip.title}" to your device.`);
       } catch (err: any) {
         pushMind(`Export failed: ${err.message || err}`);
       }
       setExporting(null);
       return;
-    } else if (clip.posted) {
-      pushMind(`“${clip.title}” is already live. Recut it to ship a new open.`);
-    } else {
-      setMessages((prev) => [
-        ...prev,
-        youMessage(`Share “${clip.title}” to YouTube`),
-      ]);
+    }
+    // A cut that is already live needs nothing said in the thread — the Cuts
+    // row is already marked live. Only a draft goes out to YouTube.
+    if (!clip.posted) {
       await shipToYouTube(clip);
     }
 
@@ -2091,7 +2378,7 @@ export default function Editor() {
   }
 
   async function regenerateMomentsFromChat(text: string) {
-    const targetId = video?.id || projectId || "notebook";
+    const targetId = threadId;
     await api.saveEditorEvent(targetId, text, "you").catch(() => null);
 
     if (!video?.id) {
@@ -2114,19 +2401,19 @@ export default function Editor() {
     try {
       const started = await api.retryAnalysis(video.id);
       setAnalysisStatus(started);
-      setActionProgress({ label: "Watching for detected moments", percent: 35 });
+      // No hardcoded progress here: the polled analysisStatus.stage now drives
+      // the bar, so it tracks the backend's real stage instead of a fixed guess.
       const { foundMoments, latestStatus } = await pollMomentAnalysis(video.id);
       setMoments(foundMoments);
 
       if (foundMoments.length > 0) {
-        const mode = await resolvePermissionMode();
-        if (mode === "auto") {
+        if (aiPermissionMode === "auto") {
           pushMind(
             `Done. I regenerated ${foundMoments.length} moment${
               foundMoments.length === 1 ? "" : "s"
             } and replaced the old set.`,
           );
-          setActionProgress({ label: "Creating cuts from regenerated moments", percent: 72 });
+          setActionProgress({ label: "Creating cuts from the regenerated moments", percent: 60 });
           await autoApproveMoments(foundMoments);
         } else {
           pushMind(
@@ -2160,23 +2447,40 @@ export default function Editor() {
     } finally {
       setBusy(false);
       setRegeneratingMoments(false);
+      setActionProgress(null); // never leave a finished bar on screen
     }
   }
 
+  // Load the thread of whichever project is open, and drop the previous one.
+  //
+  // Merging across a change of project was the leak: opening project B after A
+  // left A's conversation on screen and appended B's underneath it, because the
+  // merge only ever added. Within one project the merge stays — see mergeHistory
+  // — but a change of project (another one from History, a re-cut, Reset) starts
+  // from the server's copy and nothing else, which for a new project is an empty
+  // screen.
   useEffect(() => {
-    const targetId = video?.id || projectId || "notebook";
+    if (!projectId) {
+      // Nothing has been uploaded, so no project exists and there is no thread
+      // to read. Showing the pre-project thread here is what used to put a
+      // previous session's chat in front of a brand-new project.
+      openThread.current = null;
+      setMessages([]);
+      return;
+    }
+    const sameThread = openThread.current === projectId;
+    openThread.current = projectId;
     api
-      .getMessages(targetId)
+      .getMessages(projectId)
       .then((history) => {
-        if (history && history.length > 0) {
-          setMessages(history);
-        }
+        const rows = (history ?? []).filter((message) => !isUnpromptedChatLine(message));
+        setMessages((prev) => (sameThread ? mergeHistory(prev, rows) : rows));
       })
       .catch(() => {});
-  }, [video?.id, projectId]);
+  }, [projectId]);
 
   async function runAiEditorAction(commandText: string, opts: { captions?: boolean; publish?: boolean } = {}) {
-    const targetId = video?.id || projectId || "notebook";
+    const targetId = threadId;
     await api.saveEditorEvent(targetId, commandText, "you").catch(() => null);
 
     if (!video?.id && !clips.length) {
@@ -2205,11 +2509,12 @@ export default function Editor() {
       }
 
       if (video?.id && workingMoments.length === 0) {
+        // Immediate feedback for the moment before the first status poll lands;
+        // from the next poll on, the live analysis stage drives the bar.
         setActionProgress({ label: "Finding standout moments", percent: 22 });
         pushMind("Finding the strongest moments in this take now...");
         const started = await api.retryAnalysis(video.id);
         setAnalysisStatus(started);
-        setActionProgress({ label: "Waiting for moment detection", percent: 36 });
         const result = await pollMomentAnalysis(video.id);
         workingMoments = result.foundMoments;
         setMoments(workingMoments);
@@ -2220,7 +2525,8 @@ export default function Editor() {
         (moment) => moment.status === "accepted" && !existingMomentIds.has(moment.id),
       );
       const pending = workingMoments.filter((moment) => moment.status === "pending");
-      const toAccept = [...missingAccepted, ...pending].slice(0, 3);
+      // Strongest beats first, so the three we take are the best three, not the earliest three.
+      const toAccept = rankMoments([...missingAccepted, ...pending]).slice(0, 3);
 
       if (toAccept.length > 0) {
         setActionProgress({ label: `Preparing ${toAccept.length} moment${toAccept.length === 1 ? "" : "s"}`, percent: 48 });
@@ -2253,11 +2559,7 @@ export default function Editor() {
         serverClipIds.current = new Set(workingClips.map((clip) => clip.id));
       }
 
-      const bestClip =
-        workingClips.find((clip) => !clip.posted) ??
-        workingClips[0] ??
-        exportClip ??
-        null;
+      const bestClip = pickBestClip(workingClips, workingMoments) ?? exportClip;
 
       if (!bestClip) {
         pushMind("No cuts are ready yet. If moments are still analyzing, wait for the status to finish, then use /cuts again.");
@@ -2266,7 +2568,9 @@ export default function Editor() {
 
       setSelectedClipId(bestClip.id);
 
-      if (opts.captions || opts.publish) {
+      // Captions only when they were actually asked for. Publishing used to imply
+      // them, which dropped a subtitle layer onto the timeline nobody requested.
+      if (opts.captions) {
         setActionProgress({ label: "Adding captions", percent: 84 });
         await generateCaptionTrackForRange({
           clipId: bestClip.id,
@@ -2279,7 +2583,6 @@ export default function Editor() {
       }
 
       if (opts.publish) {
-        setActionProgress({ label: "Publishing to YouTube", percent: 92 });
         await shipToYouTube(bestClip);
       } else {
         pushMind(
@@ -2292,11 +2595,12 @@ export default function Editor() {
       pushMind(`AI action failed: ${err.message || err}`);
     } finally {
       setBusy(false);
+      setActionProgress(null); // never leave a finished bar on screen
     }
   }
 
   async function createCutFromChat(commandText: string, range: { start: number; end: number }) {
-    const targetId = video?.id || projectId || "notebook";
+    const targetId = threadId;
     await api.saveEditorEvent(targetId, commandText, "you").catch(() => null);
 
     if (!video?.id) {
@@ -2333,24 +2637,188 @@ export default function Editor() {
       pushMind(`Could not create that cut: ${err.message || err}`);
     } finally {
       setBusy(false);
+      // Clear the bar when the work ends. Nothing cleared it before, so a stale
+      // "Cut created 100%" sat in the chat forever, contradicting the real state.
+      setActionProgress(null);
     }
   }
 
-  async function publishFromChat(commandText: string) {
-    const targetId = video?.id || projectId || "notebook";
+  async function publishSelectedFromChat(commandText: string) {
+    const targetId = threadId;
     await api.saveEditorEvent(targetId, commandText, "you").catch(() => null);
-    if (!exportClip) {
-      pushMind("Create or select a cut first, then I can publish it to YouTube.");
+    // The selected cut only. exportClip falls back to "any draft", which is how
+    // a manual "publish my cut" used to wander off and cut the strongest moments.
+    const clip = clips.find((item) => item.id === selectedClipId) ?? null;
+    if (!clip) {
+      pushMind(
+        "Select a cut first. In manual mode I publish that cut and nothing else — I won't pick moments unless you ask.",
+      );
       return;
     }
-    setSelectedClipId(exportClip.id);
-    await shipToYouTube(exportClip);
+    if (clip.posted) {
+      pushMind(`“${clip.title}” is already on YouTube. I won't post it again.`);
+      return;
+    }
+    pushMind(`Publishing “${clip.title}” — the cut you selected.`);
+    setBusy(true);
+    setTool("cuts");
+    try {
+      if (asksForCaptions(commandText)) {
+        setActionProgress({
+          label: `Adding captions to “${clip.title}”`,
+          percent: 18,
+        });
+        await generateCaptionTrackForRange({
+          clipId: clip.id,
+          title: clip.title,
+          caption: clip.caption,
+          start: clip.start,
+          end: clip.end,
+          language: "en",
+        });
+      }
+      await shipToYouTube(clip);
+    } finally {
+      setBusy(false);
+      setActionProgress(null);
+    }
+  }
+
+  async function captionSelectedFromChat(commandText: string) {
+    const targetId = threadId;
+    await api.saveEditorEvent(targetId, commandText, "you").catch(() => null);
+    const clip = clips.find((item) => item.id === selectedClipId) ?? null;
+    if (!clip) {
+      pushMind("Select a cut first. In manual mode I'll caption that cut only.");
+      return;
+    }
+    pushMind(`Adding captions to “${clip.title}” — the cut you selected.`);
+    setBusy(true);
+    setTool("caption");
+    try {
+      setActionProgress({
+        label: `Adding captions to “${clip.title}”`,
+        percent: 48,
+      });
+      await generateCaptionTrackForRange({
+        clipId: clip.id,
+        title: clip.title,
+        caption: clip.caption,
+        start: clip.start,
+        end: clip.end,
+        language: "en",
+      });
+      setActionProgress({
+        label: `Captions added to “${clip.title}”`,
+        percent: 100,
+      });
+      await sleep(1200);
+    } finally {
+      setBusy(false);
+      setActionProgress(null);
+    }
+  }
+
+  /**
+   * Pick up work an interruption cut short, starting from the server's state.
+   *
+   * Reading the screen's own lists would be the wrong start: the interruption is
+   * exactly what left the two out of step. A request that died mid-accept leaves
+   * the UI holding whatever it had optimistically, while the server knows
+   * precisely which moments were already decided. So this re-reads both lists
+   * first, then continues at the furthest stage that was actually reached, and
+   * narrates each stage to the progress loader rather than to the chat.
+   *
+   * That makes resuming repeatable: every attempt reads the recorded state fresh,
+   * so an interrupted run picks up at the next undecided moment and already-cut
+   * work is never redone.
+   */
+  async function resumeWork() {
+    if (!video?.id) {
+      pushMind("There is nothing to resume yet — upload a take first.");
+      return;
+    }
+
+    // Deliberately not chatBusy: that flag exists to put "Thinking..." above the
+    // composer, and nothing here is thinking — the progress loader below is the
+    // honest report, and chatBusy does not gate the input anyway.
+    setBusy(true);
+    try {
+      setActionProgress({ label: "Checking where the last run stopped", percent: 8 });
+      const [serverMoments, serverClips] = await Promise.all([
+        api.listMoments(video.id),
+        api.listClips(video.id),
+      ]);
+      setMoments(serverMoments);
+      setClips(serverClips);
+      serverClipIds.current = new Set(serverClips.map((clip) => clip.id));
+
+      // Stage 1 — the run died while moments were still being decided, so the
+      // cut and publish steps after it never started.
+      const undecided = rankMoments(
+        serverMoments.filter((moment) => moment.status === "pending"),
+      );
+      if (undecided.length) {
+        setTool("moments");
+        if (aiPermissionMode === "auto") {
+          setActionProgress({
+            label: `Resuming ${undecided.length} undecided moment${
+              undecided.length === 1 ? "" : "s"
+            }`,
+            percent: 40,
+          });
+          await autoApproveMoments(serverMoments);
+        } else {
+          pushMind(
+            `Picked up where it stopped: ${undecided.length} moment${
+              undecided.length === 1 ? " is" : "s are"
+            } still waiting on Keep or Skip. Auto approve is off, so they need your call.`,
+          );
+        }
+        return;
+      }
+
+      // Stage 2 — every moment was decided, but a cut never reached YouTube.
+      const drafts = serverClips.filter((clip) => !clip.posted);
+      const best = pickBestClip(serverClips, serverMoments);
+      if (best && drafts.length) {
+        setTool("cuts");
+        setSelectedClipId(best.id);
+        if (aiPermissionMode === "auto") {
+          await shipToYouTube(best);
+        } else {
+          pushMind(
+            `Picked up where it stopped: “${best.title}” is cut and ready${
+              drafts.length > 1 ? `, along with ${drafts.length - 1} more` : ""
+            }. Auto approve is off, so nothing published itself — say “post it” when you want it up.`,
+          );
+        }
+        return;
+      }
+
+      // Stage 3 — nothing was in flight. Saying so plainly is the honest answer,
+      // and it is what stops the Mind from promising work that has no code behind
+      // it: "Processing the remaining 3 moments" was pure invention.
+      setTool("cuts");
+      pushMind(
+        serverClips.length
+          ? "Nothing was left mid-flight — every moment has been decided and every cut is already on YouTube."
+          : "Nothing was left mid-flight — no moments are waiting on a decision and there are no cuts yet.",
+      );
+    } catch (err: any) {
+      // The state read is idempotent, so saying "resume" again simply carries on
+      // from wherever this attempt got to.
+      pushMind(`Couldn't resume: ${err.message || err}`);
+    } finally {
+      setBusy(false);
+      setActionProgress(null); // never leave a finished bar on screen
+    }
   }
 
   async function handleSend(text: string) {
     setPrompt("");
     setMessages((prev) => [...prev, youMessage(text)]);
-    const targetId = video?.id || projectId || "notebook";
+    const targetId = threadId;
 
     const permissionCommand = parsePermissionCommand(text);
     if (permissionCommand) {
@@ -2366,13 +2834,71 @@ export default function Editor() {
       return;
     }
 
+    if (isResumePrompt(text)) {
+      // Handled by the editor, not the Mind — see resumeWork. The ask is still
+      // recorded so the thread reads the way the creator typed it.
+      await api.saveEditorEvent(targetId, text, "you").catch(() => null);
+      await resumeWork();
+      return;
+    }
+
     if (isMomentRegenerationPrompt(text)) {
       await regenerateMomentsFromChat(text);
       return;
     }
 
-    if (wantsFullAutoPost(text)) {
-      await runAiEditorAction(text, { captions: true, publish: true });
+    if (pendingManualConfirm.current) {
+      const pending = pendingManualConfirm.current;
+      if (isYes(text)) {
+        pendingManualConfirm.current = null;
+        await runAiEditorAction(pending, {
+          captions: asksForCaptions(pending),
+          publish: true,
+        });
+        return;
+      }
+      if (isNo(text)) {
+        pendingManualConfirm.current = null;
+        const selected = clips.find((item) => item.id === selectedClipId);
+        pushMind(
+          selected
+            ? `Okay. I won't pick moments. Say “publish it” when you want “${selected.title}” on YouTube.`
+            : "Okay. I won't pick moments.",
+        );
+        return;
+      }
+      pendingManualConfirm.current = null;
+    }
+
+    const manual = aiPermissionMode !== "auto";
+
+    // Manual mode does the sentence the creator typed, and asks before it
+    // borrows the auto-approve pipeline (pick moments, cut the best, publish).
+    if (manual && isPublishPrompt(text) && asksToBuildBeforePosting(text)) {
+      pendingManualConfirm.current = text;
+      await api.saveEditorEvent(targetId, text, "you").catch(() => null);
+      const selected = clips.find((item) => item.id === selectedClipId);
+      pushMind(
+        selected
+          ? `Picking moments and publishing one is auto approve. Reply “yes” to do that, or “no”. To post only the cut you selected, say “publish it” and I’ll put “${selected.title}” on YouTube.`
+          : "Picking moments and publishing one is auto approve. You're in manual mode, so reply “yes” to do that, or select a cut and tell me to publish it.",
+      );
+      return;
+    }
+
+    if (manual && isPublishPrompt(text)) {
+      await publishSelectedFromChat(text);
+      return;
+    }
+
+    if (manual && isCaptionPrompt(text)) {
+      await captionSelectedFromChat(text);
+      return;
+    }
+
+    if (!manual && wantsFullAutoPost(text)) {
+      // Captions come from the message, not from the fact that this is a post.
+      await runAiEditorAction(text, { captions: asksForCaptions(text), publish: true });
       return;
     }
 
@@ -2382,7 +2908,7 @@ export default function Editor() {
     }
 
     if (isCreateMomentsPrompt(text)) {
-      await runAiEditorAction(text, { captions: /\b(caption|captions|subtitles|cc)\b/i.test(text) });
+      await runAiEditorAction(text, { captions: asksForCaptions(text) });
       return;
     }
 
@@ -2393,7 +2919,7 @@ export default function Editor() {
     }
 
     if (isPublishPrompt(text)) {
-      await publishFromChat(text);
+      await publishSelectedFromChat(text);
       return;
     }
 
@@ -2497,7 +3023,7 @@ export default function Editor() {
       handleSplit();
     },
     del: () => {
-      if (selectedClipId) deleteClip(selectedClipId);
+      deleteSelected();
     },
     dup: () => {
       if (selectedClipId) duplicateClip(selectedClipId);
@@ -2591,9 +3117,13 @@ export default function Editor() {
               autoFocus
               aria-label="Project name"
               onChange={(event) => setProjectName(event.target.value)}
-              onBlur={() => {
-                setProjectName((name) => name.trim() || "Untitled");
+              onBlur={(event) => {
+                const name = event.currentTarget.value.trim() || "Untitled";
+                setProjectName(name);
                 setRenaming(false);
+                if (projectIdRef.current) {
+                  void api.updateProject(projectIdRef.current, { name }).catch(() => null);
+                }
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
@@ -2605,14 +3135,25 @@ export default function Editor() {
               }}
             />
           ) : (
-            <button
-              type="button"
-              className="cut__project"
-              title="Rename project"
-              onClick={() => setRenaming(true)}
-            >
-              {projectName}
-            </button>
+            <div className="cut__slate-name">
+              <button
+                type="button"
+                className="cut__project"
+                title="Rename project"
+                onClick={() => setRenaming(true)}
+              >
+                {projectName}
+              </button>
+              <button
+                type="button"
+                className="cut__rename"
+                aria-label="Rename project"
+                title="Rename project"
+                onClick={() => setRenaming(true)}
+              >
+                <Pencil aria-hidden="true" />
+              </button>
+            </div>
           )}
           <span>{stamp}</span>
           <span
@@ -2680,7 +3221,9 @@ export default function Editor() {
 
         <span className="cut__stagechip">
           <i aria-hidden="true" />
-          {WORKFLOW_STEPS[stage].label}
+          {analysisStatus && !analysisStatus.done
+            ? analysisStageLabel(analysisStatus.stage)
+            : WORKFLOW_STEPS[stage].label}
         </span>
 
         <EditorActions
@@ -2708,7 +3251,7 @@ export default function Editor() {
         analysisStatus={analysisStatus}
         moments={moments}
         clips={clips}
-        messages={messages}
+        messages={messages.filter((message) => !isUnpromptedChatLine(message))}
         chatBusy={chatBusy}
         regeneratingMoments={regeneratingMoments}
         actionProgress={actionProgress}
@@ -2731,6 +3274,7 @@ export default function Editor() {
         onRecut={handleRecut}
         onDecideMoment={handleDecideMoment}
         onToolChange={setTool}
+        onReanalyze={() => void reanalyzeTake()}
       />
 
       <section className="cut__stage" aria-label="Preview and timeline" ref={stageRef}>
@@ -2822,10 +3366,12 @@ export default function Editor() {
                   takeStageFile(event.dataTransfer.files?.[0]);
                 }}
               >
-                {hasTake ? (
+                {projectName === "Opening…" || hasTake ? (
                   <div className="cut__empty-hit" aria-live="polite">
                     <strong>{projectName === "Opening…" ? "Opening project" : projectName}</strong>
-                    <span className="cut__empty-sub">Loading your take…</span>
+                    <span className="cut__empty-sub">
+                      {projectName === "Opening…" ? "Opening your project…" : "Loading your take…"}
+                    </span>
                   </div>
                 ) : (
                   <button
@@ -2915,14 +3461,17 @@ export default function Editor() {
           onSeek={seek}
           onPickClip={(id) => {
             handlePickClip(id);
+            setSelection("clip");
             setTool("caption");
           }}
           onPickCaptionTrack={(id) => {
             setSelectedCaptionTrackId(id);
+            setSelection("caption");
             setTool("caption");
           }}
           onPickTakeSegment={(id) => {
             setSelectedTakeId(id);
+            setSelection("take");
             setTool("take");
           }}
           onClipContextMenu={openMenu}
