@@ -70,7 +70,7 @@ def _classify_error(exc: Exception) -> dict:
     if "connect" in lowered or "network" in lowered or "disconnected" in lowered:
         return {
             "errorType": "network",
-            "message": "Network error while sending the video for analysis. Check the connection and retry.",
+            "message": "Connection error while reaching the video API. Check your internet connection and retry.",
         }
     if "500" in text or "503" in text or "server error" in lowered:
         return {
@@ -78,8 +78,8 @@ def _classify_error(exc: Exception) -> dict:
             "message": "The video AI service returned a server error. Try again in a moment.",
         }
     return {
-        "errorType": "unknown",
-        "message": "The video AI could not finish this analysis. Try again or use a shorter clip.",
+        "errorType": "api",
+        "message": f"API error while analyzing the video: {text or type(exc).__name__}",
     }
 
 

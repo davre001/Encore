@@ -99,6 +99,25 @@ const CAPTION_LANGUAGES: { id: CaptionLanguage; label: string }[] = [
   { id: "hi", label: "Hindi" },
 ];
 
+function displayAnalysisMessage(status: AnalysisStatus | null, hasVideo: boolean) {
+  if (!status) return null;
+  if (status.message.includes("video AI") && status.message.includes("could not finish")) {
+    if (status.errorType === "network") {
+      return "Connection error. Check your internet connection and retry.";
+    }
+    return "API error while analyzing the video. Try again when the connection is stable.";
+  }
+  if (status.errorType === "network") {
+    return "Connection error. Check your internet connection and retry.";
+  }
+  if (status.errorType === "api") {
+    return status.message.startsWith("API error") ? status.message : `API error: ${status.message}`;
+  }
+  if (status.errorType === "timeout") {
+    return "The analysis took too long. Retry when the connection is stable or use a shorter clip.";
+  }
+  return status.message || (hasVideo ? "Analysis updates will appear here as the video is processed." : null);
+}
 const ANALYSIS_PROGRESS: Record<AnalysisStatus["stage"], number> = {
   queued: 8,
   uploaded: 14,
@@ -274,7 +293,7 @@ export default function ToolPanel(props: ToolPanelProps) {
         {props.analysisStatus && !props.analysisStatus.done ? (
           <div className="cut__chat-progress" aria-live="polite">
             <div className="cut__chat-progress-top">
-              <span>{props.analysisStatus.message}</span>
+              <span>{displayAnalysisMessage(props.analysisStatus, !!video)}</span>
               <b>{ANALYSIS_PROGRESS[props.analysisStatus.stage]}%</b>
               <button
                 type="button"
@@ -344,7 +363,7 @@ export default function ToolPanel(props: ToolPanelProps) {
           props.moments.length === 0 ? (
             panelLoading ? null : (
             <p className="cut__hint">
-              {props.analysisStatus?.stage === "error" ? props.analysisStatus.message : props.analysisStatus?.message && video ? props.analysisStatus.message : video ? "No moments detected yet. Analysis updates will appear here as the video is processed." : "Upload a long take first. Encore will find the beats that stand alone."}
+              {displayAnalysisMessage(props.analysisStatus, !!video) ?? (video ? "No moments detected yet. Analysis updates will appear here as the video is processed." : "Upload a long take first. Encore will find the beats that stand alone.")}
             </p>
             )
           ) : (
