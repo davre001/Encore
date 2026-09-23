@@ -447,6 +447,7 @@ export default function Editor() {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [statusText, setStatusText] = useState<string | null>(null);
   const [regeneratingMoments, setRegeneratingMoments] = useState(false);
   // Progress for work the backend cannot report (cutting, captioning,
   // publishing). Analysis phases come from analysisStatus instead, and every
@@ -455,6 +456,7 @@ export default function Editor() {
   const [actionStopped, setActionStopped] = useState(false);
   const stoppedActionRef = useRef(false);
   const rejoinAnalysisRef = useRef<string | null>(null);
+  const autoResumeRef = useRef<string | null>(null);
   const [stamp, setStamp] = useState("");
 
   // Clip editing: a one-slot clipboard for copy/cut/paste and a linear
@@ -858,7 +860,35 @@ export default function Editor() {
     };
   }, [mediaUrl, mediaDuration]);
 
+  function errorText(prefix: string, err: unknown) {
+    const raw = err instanceof Error ? err.message : String(err || "Unknown error");
+    const lower = raw.toLowerCase();
+    if (
+      lower.includes("failed to fetch") ||
+      lower.includes("networkerror") ||
+      lower.includes("load failed") ||
+      lower.includes("internet disconnected") ||
+      lower.includes("connection")
+    ) {
+      return `${prefix}: Connection error. Check your internet connection and try again.`;
+    }
+    if (lower.includes("econnrefused") || lower.includes("unable to connect")) {
+      return `${prefix}: Unable to reach Encore API. Make sure the backend is running and try again.`;
+    }
+    if (lower.includes("api error")) {
+      return `${prefix}: ${raw}`;
+    }
+    if (lower.includes("the video ai could not finish this analysis")) {
+      return `${prefix}: API error while analyzing the video. Try again when the connection is stable.`;
+    }
+    return `${prefix}: ${raw}`;
+  }
+
+  function showStatus(text: string) {
+    setStatusText(text);
+  }
   const pushMind = useCallback((text: string, persist = true) => {
+    setStatusText(null);
     setMessages((prev) => [...prev, mindMessage(text)]);
     if (!persist) return;
     void api.saveEditorEvent(threadId, text).catch(() => {});
@@ -1147,7 +1177,8 @@ export default function Editor() {
     const pending = rankMoments(
       nextMoments.filter((moment) => moment.status === "pending"),
     ).slice(0, 3);
-    if (!pending.length) return;
+    const vidId = video?.id || nextMoments[0]?.videoId;
+    if (!pending.length && !vidId) return;
     setBusy(true);
 
     try {
@@ -1157,51 +1188,39 @@ export default function Editor() {
       for (const moment of pending) {
         if (stoppedActionRef.current) return;
         index += 1;
-        // Name the beat being cut and count through the batch. This path makes
-        // no other report, so the loader is the only place the creator can see
-        // which of several accepts is running — and, if the run dies partway,
-        // how far it actually got before it stopped.
         setActionProgress({
-          label: `Cutting “${moment.label}” (${index} of ${pending.length})`,
+          label: `Cutting "${moment.label}" (${index} of ${pending.length})`,
           percent: 60 + Math.round(((index - 1) / pending.length) * 24),
         });
         const updated = await api.decideMoment(moment.id, "accept");
         acceptedMoments.push(updated);
       }
-      if (acceptedMoments.length) {
-        setMoments((prev) =>
-          prev.map(
+      const momentsForPick = acceptedMoments.length
+        ? nextMoments.map(
             (moment) => acceptedMoments.find((item) => item.id === moment.id) ?? moment,
-          ),
-        );
+          )
+        : nextMoments;
+      if (acceptedMoments.length) {
+        setMoments(momentsForPick);
       }
 
-      const vidId = video?.id || pending[0]?.videoId;
       if (vidId) {
         nextClips = await api.listClips(vidId);
         setClips(nextClips);
         serverClipIds.current = new Set(nextClips.map((clip) => clip.id));
       }
 
-      const bestClip = pickBestClip(nextClips, nextMoments);
-      if (!bestClip) return;
+      const bestClip = pickBestClip(nextClips, momentsForPick);
+      if (!bestClip || bestClip.posted) return;
 
       setSelectedClipId(bestClip.id);
       setTool("cuts");
-      // Auto approve carries the beat all the way through: accept the strongest
-      // moments, cut them, and publish the best one.
-      //
-      // This path says nothing else in the chat. Its whole report is the posted
-      // notification (with the link to watch) and the verdict that follows it;
-      // the progress loader covers the wait. Captions stay off — auto approve
-      // does not subtitle unless asked.
       await shipToYouTube(bestClip);
     } finally {
       setBusy(false);
       setActionProgress(null); // never leave a finished bar on screen
     }
   }
-
   function handleReset() {
     setVideo(null);
     setAnalysisStatus(null);
@@ -2403,7 +2422,7 @@ export default function Editor() {
       await sleep(1400);
       return true;
     } catch (err: any) {
-      pushMind(`Publish failed: ${err.message || err}`);
+      showStatus(errorText("Publish failed", err));
       return false;
     }
   }
@@ -2418,7 +2437,7 @@ export default function Editor() {
       try {
         await downloadRenderedClip(clip);
       } catch (err: any) {
-        pushMind(`Export failed: ${err.message || err}`);
+        showStatus(errorText("Export failed", err));
       }
       setExporting(null);
       return;
@@ -2585,7 +2604,7 @@ export default function Editor() {
         updatedAt: Date.now(),
         done: true,
       });
-      pushMind(message);
+      showStatus(message);
     } finally {
       setBusy(false);
       setRegeneratingMoments(false);
@@ -2682,7 +2701,7 @@ export default function Editor() {
             const updated = await api.decideMoment(moment.id, "accept");
             accepted.push(updated);
           } catch (err: any) {
-            pushMind(`Could not create a cut for "${moment.label}": ${err.message || err}`);
+            showStatus(errorText(`Could not create a cut for "${moment.label}"`, err));
             continue;
           }
           if (video?.id) {
@@ -2737,7 +2756,7 @@ export default function Editor() {
         );
       }
     } catch (err: any) {
-      pushMind(`AI action failed: ${err.message || err}`);
+      showStatus(errorText("AI action failed", err));
     } finally {
       setBusy(false);
       setActionProgress(null); // never leave a finished bar on screen
@@ -2779,7 +2798,7 @@ export default function Editor() {
       setActionProgress({ label: "Cut created", percent: 100 });
       pushMind(`Created "${created.title}" from ${formatTime(start)} to ${formatTime(end)}.`);
     } catch (err: any) {
-      pushMind(`Could not create that cut: ${err.message || err}`);
+      showStatus(errorText("Could not create that cut", err));
     } finally {
       setBusy(false);
       // Clear the bar when the work ends. Nothing cleared it before, so a stale
@@ -2955,14 +2974,56 @@ export default function Editor() {
     } catch (err: any) {
       // The state read is idempotent, so saying "resume" again simply carries on
       // from wherever this attempt got to.
-      pushMind(`Couldn't resume: ${err.message || err}`);
+      showStatus(errorText("Couldn't resume", err));
     } finally {
       setBusy(false);
       setActionProgress(null); // never leave a finished bar on screen
     }
   }
 
+  useEffect(() => {
+    if (!video?.id || !analysisStatus?.done || actionStopped) return;
+    let cancelled = false;
+    void (async () => {
+      const [serverMoments, serverClips] = await Promise.all([
+        api.listMoments(video.id).catch(() => null),
+        api.listClips(video.id).catch(() => null),
+      ]);
+      if (cancelled) return;
+      if (serverMoments) setMoments(serverMoments);
+      if (serverClips) {
+        setClips(serverClips);
+        serverClipIds.current = new Set(serverClips.map((clip) => clip.id));
+        setSelectedClipId((current) => current ?? serverClips[0]?.id ?? null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [video?.id, analysisStatus?.done, analysisStatus?.updatedAt, actionStopped]);
+
+  useEffect(() => {
+    if (!video?.id || aiPermissionMode !== "auto" || busy || actionStopped) return;
+    const clipMomentIds = new Set(clips.map((clip) => clip.momentId));
+    const pending = moments.filter((moment) => moment.status === "pending");
+    const uncutAccepted = moments.filter(
+      (moment) => moment.status === "accepted" && !clipMomentIds.has(moment.id),
+    );
+    const drafts = clips.filter((clip) => !clip.posted);
+    if (!pending.length && !uncutAccepted.length && !drafts.length) return;
+
+    const key = [
+      video.id,
+      pending.map((moment) => moment.id).join(","),
+      uncutAccepted.map((moment) => moment.id).join(","),
+      drafts.map((clip) => clip.id).join(","),
+    ].join("|");
+    if (autoResumeRef.current === key) return;
+    autoResumeRef.current = key;
+    void resumeWork();
+  }, [video?.id, aiPermissionMode, busy, actionStopped, moments, clips]);
   async function handleSend(text: string) {
+    setStatusText(null);
     setPrompt("");
     setMessages((prev) => [...prev, youMessage(text)]);
     const targetId = threadId;
@@ -3094,7 +3155,7 @@ export default function Editor() {
       const reply = await api.sendMessage(targetId, text);
       setMessages((prev) => [...prev, reply]);
     } catch (err: any) {
-      pushMind(`Failed to reach Encore Mind: ${err.message || err}`);
+      showStatus(errorText("Failed to reach Encore Mind", err));
     } finally {
       setChatBusy(false);
     }
@@ -3418,6 +3479,7 @@ export default function Editor() {
         clips={clips}
         messages={messages.filter((message) => !isUnpromptedChatLine(message))}
         chatBusy={chatBusy}
+        statusText={statusText}
         regeneratingMoments={regeneratingMoments}
         actionProgress={actionProgress}
         selectedClipId={selectedClipId}

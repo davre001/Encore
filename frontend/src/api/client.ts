@@ -49,11 +49,32 @@ function authTokenParam(): string {
   return token ? `?access_token=${encodeURIComponent(token)}` : "";
 }
 
+function apiErrorDetail(text: string): string {
+  if (!text) return "";
+  try {
+    const body = JSON.parse(text);
+    const detail = body?.detail ?? body?.message ?? body?.error;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => item?.msg || item?.message || JSON.stringify(item))
+        .join("; ");
+    }
+    if (detail && typeof detail === "object") {
+      return detail.message || JSON.stringify(detail);
+    }
+  } catch {
+    /* Response was plain text/HTML. */
+  }
+  return text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    const detail = apiErrorDetail(text);
     throw new Error(
-      `API Error ${res.status} ${res.statusText}${text ? `: ${text}` : ""}`
+      `API Error ${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`
     );
   }
   return res.json();

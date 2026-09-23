@@ -12,9 +12,9 @@ Run with `python -m app` (binds :5000) or the uvicorn CLI.
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from .config import CORS_ORIGINS, capabilities
 from . import storage
@@ -66,6 +66,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(Exception)
+async def unhandled_exception(_request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc}"},
+    )
 
 @app.get("/", include_in_schema=False)
 async def root() -> RedirectResponse:

@@ -54,6 +54,7 @@ type ToolPanelProps = {
   clips: Clip[];
   messages: Message[];
   chatBusy: boolean;
+  statusText: string | null;
   regeneratingMoments: boolean;
   actionProgress: { label: string; percent: number } | null;
   selectedClipId: string | null;

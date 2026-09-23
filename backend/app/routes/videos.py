@@ -7,7 +7,7 @@ import os
 import shutil
 from typing import Optional
 
-from fasta 4pi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import storage
