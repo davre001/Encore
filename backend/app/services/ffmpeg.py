@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import uuid
+from typing import Optional
 
 from ..config import FALLBACK_DURATION, UPLOAD_DIR
 
@@ -48,6 +49,40 @@ def probe_duration(path: str) -> float:
     except (ValueError, OSError, subprocess.SubprocessError):
         return FALLBACK_DURATION
 
+
+
+def probe_dimensions(path: str) -> tuple[Optional[int], Optional[int]]:
+    """Real pixel size of a media file, or (None, None) when unreadable.
+
+    The editor also probes this in the browser on import; this copy is for the
+    server's own record of the take (and for caption line budgets when the
+    client has not said which frame it is drawing into).
+    """
+    if not path or not os.path.exists(path) or not _has("ffprobe"):
+        return None, None
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=s=x:p=0",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        width, _, height = out.stdout.strip().partition("x")
+        w, h = int(width), int(height)
+        return (w, h) if w > 0 and h > 0 else (None, None)
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return None, None
 
 
 def _drawtext_escape(value: str) -> str:

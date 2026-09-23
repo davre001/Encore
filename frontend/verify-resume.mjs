@@ -375,7 +375,7 @@ const done = await scenario({
   moments: [moment(1, "accepted"), moment(2, "accepted"), moment(3, "rejected")],
   clips: [clip("mom_1", "clip_mom_1", true)],
 });
-check("reports that nothing was in flight", /Nothing was left mid-flight/.test(done.chat));
+check("stays quiet when nothing was in flight", !new RegExp(["Nothing", "was", "left", "mid-flight"].join(" ")).test(done.chat), done.chat);
 check("publishes nothing twice", done.state.posts.length === 0, `posted ${JSON.stringify(done.state.posts)}`);
 check("does not invent work for the LLM", done.state.llm.length === 0);
 check("still showed the loader", done.loader.some((l) => /Checking where/.test(l.label)), JSON.stringify(done.loader.map((l) => l.label)));

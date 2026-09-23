@@ -19,6 +19,9 @@ Verdict = Literal["hit", "mid", "flop"]
 CheckVerdict = Literal["hit", "mid", "flop", "pending"]
 Role = Literal["mind", "you"]
 CaptionLanguage = Literal["en", "fr", "es", "pt", "de", "it", "ar", "hi"]
+# Whether a caption track's timings were heard (cut from a transcript) or
+# distributed by the builder.
+CaptionSource = Literal["speech", "estimated"]
 AnalysisStage = Literal[
     "queued",
     "uploaded",
@@ -46,6 +49,10 @@ class Video(CamelModel):
     name: str
     duration: float
     created_at: int  # ms since epoch, like JS Date.now()
+    # Source dimensions when ffprobe could read them. The editor uses the ratio
+    # to open a take in its own aspect instead of assuming 16:9.
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 class Moment(CamelModel):
@@ -167,11 +174,23 @@ class ClipUpdate(CamelModel):
     end: Optional[float] = None
 
 
+class CaptionWord(CamelModel):
+    """One spoken word on the timeline — what makes a caption track beat with
+    the voice instead of guessing where inside a line the speaker has got to."""
+
+    start: float
+    end: float
+    text: str
+
+
 class CaptionSegment(CamelModel):
     id: str
     start: float
     end: float
     text: str
+    # Empty for a cue whose text was typed by hand or estimated without an
+    # audio read; the preview falls back to the plain line when it is.
+    words: list[CaptionWord] = []
 
 
 class CaptionTrack(CamelModel):
@@ -182,6 +201,38 @@ class CaptionTrack(CamelModel):
     font_source: Optional[str] = "system"
     font_url: Optional[str] = None
     segments: list[CaptionSegment]
+    # "speech" when every cue is cut from a real transcript; "estimated" when
+    # the timings are distributed rather than heard. The panel says which, so a
+    # creator is never told a guess is word-accurate.
+    source: CaptionSource = "estimated"
+
+
+CaptionStage = Literal[
+    "queued",
+    "transcribing",
+    "beats",
+    "fitting",
+    "complete",
+    "error",
+]
+
+
+class CaptionJob(CamelModel):
+    """Progress for a caption run, polled by the editor.
+
+    Generating captions reads the whole take through whisper, which is far too
+    long to hold a request open for with nothing on screen. The POST starts the
+    job and this is what the loader follows — `progress` is the share of the
+    audio actually decoded, not a timer.
+    """
+
+    clip_id: str
+    stage: CaptionStage
+    message: str
+    progress: int = 0
+    done: bool = False
+    error: Optional[str] = None
+    track: Optional[CaptionTrack] = None
 
 
 class CaptionGenerateRequest(CamelModel):
@@ -192,6 +243,9 @@ class CaptionGenerateRequest(CamelModel):
     start: float
     end: float
     language: CaptionLanguage = "en"
+    # The frame the captions will be drawn into ("9:16", "16:9", …). Cues are
+    # budgeted to it so a portrait clip never gets a landscape-length line.
+    aspect: str = "16:9"
 
 
 # --- Small response envelopes ----------------------------------------------

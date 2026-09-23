@@ -48,6 +48,16 @@ except Exception as e:
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+def _use_sqlite_fallback(reason: Exception) -> None:
+    """Switch to local SQLite when the configured remote database is unavailable."""
+    global engine, SessionLocal, db_url
+    logger.warning("Configured database unavailable (%s), falling back to SQLite.", reason)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    db_path = os.path.join(DATA_DIR, "encore.db")
+    db_url = f"sqlite:///{db_path}"
+    engine = create_engine(db_url, connect_args={"check_same_thread": False})
+    SessionLocal.configure(bind=engine)
+
 
 def get_db() -> Generator[Session, None, None]:
     """FastAPI dependency yielding an isolated database session per request."""
@@ -89,7 +99,11 @@ def _sync_missing_columns() -> None:
 
 def init_db() -> None:
     """Create all registered database tables if they do not already exist."""
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        _use_sqlite_fallback(e)
+        Base.metadata.create_all(bind=engine)
     try:
         _sync_missing_columns()
     except Exception as e:  # never block startup on a best-effort column sync

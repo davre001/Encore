@@ -24,11 +24,11 @@ const TOOLS: {
   title: string;
   Icon: typeof Film;
 }[] = [
-  { id: "take", label: "Take", title: "The long take", Icon: Film },
-  { id: "moments", label: "Moments", title: "Standout beats (keep or skip)", Icon: BookmarkCheck },
-  { id: "cuts", label: "Cuts", title: "Cuts ready to ship", Icon: Scissors },
-  { id: "caption", label: "Captions", title: "On-video captions", Icon: Captions },
-  { id: "mind", label: "Mind", title: "Talk to Encore", Icon: Sparkle },
+  { id: "take", label: "TAKE", title: "The long take", Icon: Film },
+  { id: "moments", label: "MOMENTS", title: "Standout beats (keep or skip)", Icon: BookmarkCheck },
+  { id: "cuts", label: "CUTS", title: "Cuts ready to ship", Icon: Scissors },
+  { id: "caption", label: "CAPTIONS", title: "On-video captions", Icon: Captions },
+  { id: "mind", label: "MIND", title: "Talk to Encore", Icon: Sparkle },
 ];
 
 type ToolRailProps = {

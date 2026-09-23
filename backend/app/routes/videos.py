@@ -47,11 +47,14 @@ def _save_video_record(
     user_id: Optional[str],
 ) -> Video:
     duration = ffmpeg.probe_duration(src_path)
+    width, height = ffmpeg.probe_dimensions(src_path)
     video = Video(
         id=storage.new_id("vid"),
         name=filename or "take.mp4",
         duration=duration,
         created_at=storage.now_ms(),
+        width=width,
+        height=height,
     )
     record = video.model_dump(by_alias=True)
     record["srcPath"] = src_path
@@ -73,7 +76,16 @@ def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
     try:
         _status(video_id, "thinking", "Preparing the video for analysis.")
         _status(video_id, "transcribing", "Reading the audio and speech timing.")
-        transcript = transcribe.transcribe(src_path)
+        rows = transcribe.transcribe_words(src_path)
+        if rows:
+            # Keep the words: the caption job reads this instead of decoding the
+            # take a second time, and both features then agree on when a word
+            # was said. One read serves both.
+            storage.save_transcript(video_id, rows)
+        transcript = [
+            {"start": row["start"], "end": row["end"], "text": row["text"]}
+            for row in rows
+        ]
         _status(video_id, "watching", "Watching the video for standout moments.")
         moments = analyze.find_moments(video_id, duration, transcript, src_path)
         _status(video_id, "generating", "Turning the strongest beats into proposed cuts.")

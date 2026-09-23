@@ -304,7 +304,7 @@ export default function Timeline({
   }
 
   // Drag the playhead itself to scrub — the line carries a full-height,
-  // invisible grab strip (cursor: ew-resize) so there's no visible knob, just a
+  // invisible grab strip so there's no visible knob, just a
   // line, while dragging still works. Clicking/tapping the ruler and the arrow
   // keys stay as non-drag alternatives, satisfying WCAG 2.5.7.
   function onKnobDown(event: PointerEvent<HTMLSpanElement>) {
@@ -703,10 +703,10 @@ export default function Timeline({
                     }`}
                     style={{ left: `${box.left}px`, width: `${box.width}px` }}
                     title={`${seg.title} (${formatTime(activeStart)} - ${formatTime(activeEnd)})`}
-                    onPointerDown={onTakePointerDown(seg, "move")}
-                    onPointerMove={onTakePointerMove}
-                    onPointerUp={onTakePointerUp}
-                    onPointerCancel={onTakePointerUp}
+                    onClick={() => {
+                      onPickTakeSegment?.(seg.id);
+                      onSeek(seg.start);
+                    }}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -781,10 +781,10 @@ export default function Timeline({
                     }`}
                     style={{ left: `${box.left}px`, width: `${box.width}px` }}
                     title={`${clip.title} (${formatTime(activeStart)} - ${formatTime(activeEnd)})`}
-                    onPointerDown={onClipPointerDown(clip, "move")}
-                    onPointerMove={onClipPointerMove}
-                    onPointerUp={onClipPointerUp}
-                    onPointerCancel={onClipPointerUp}
+                    onClick={() => {
+                      onPickClip(clip.id);
+                      onSeek(clip.start);
+                    }}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();

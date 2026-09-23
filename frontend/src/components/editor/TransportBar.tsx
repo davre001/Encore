@@ -43,6 +43,7 @@ type TransportBarProps = {
   canEdit: boolean;
   canUndo: boolean;
   canRedo: boolean;
+  mainTakeLocked?: boolean;
   aiPermissionMode: AiPermissionMode;
   fullscreen: boolean;
   onEdit: (edit: TransportEdit) => void;
@@ -84,6 +85,7 @@ export default function TransportBar({
   canEdit,
   canUndo,
   canRedo,
+  mainTakeLocked = false,
   aiPermissionMode,
   fullscreen,
   onEdit,
@@ -100,10 +102,10 @@ export default function TransportBar({
         <IconBtn label="Redo" Icon={Redo2} onClick={() => onEdit("redo")} disabled={!canRedo} />
         <span className="cut__tool-divider" aria-hidden="true" />
         <IconBtn label="Delete selected" Icon={Trash2} onClick={() => onEdit("delete")} disabled={!canEdit} />
-        <IconBtn label="Cut at playhead" Icon={Scissors} onClick={() => onEdit("cut")} disabled={!canEdit} />
+        <IconBtn label="Cut at playhead" Icon={Scissors} onClick={() => onEdit("cut")} disabled={!canEdit || mainTakeLocked} />
         <IconBtn label="Generate captions" Icon={Captions} onClick={() => onEdit("captions")} disabled={!canEdit} />
-        <IconBtn label="Trim left side to playhead" Icon={StepBack} onClick={() => onEdit("trim-left")} disabled={!canEdit} />
-        <IconBtn label="Trim right side from playhead" Icon={StepForward} onClick={() => onEdit("trim-right")} disabled={!canEdit} />
+        <IconBtn label="Trim left side to playhead" Icon={StepBack} onClick={() => onEdit("trim-left")} disabled={!canEdit || mainTakeLocked} />
+        <IconBtn label="Trim right side from playhead" Icon={StepForward} onClick={() => onEdit("trim-right")} disabled={!canEdit || mainTakeLocked} />
       </div>
 
       <div className="cut__xcluster cut__xcluster--transport">

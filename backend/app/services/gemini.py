@@ -60,26 +60,26 @@ def _classify_error(exc: Exception) -> dict:
     if "429" in text or "too many requests" in lowered:
         return {
             "errorType": "quota",
-            "message": "The video AI hit a rate limit. Try again in a few minutes or use a higher quota key.",
+            "message": "Rate limit error",
         }
     if "timeout" in lowered or "timed out" in lowered:
         return {
             "errorType": "timeout",
-            "message": "The video AI took too long to answer. Try again, or use a shorter clip.",
+            "message": "Timeout error",
         }
-    if "connect" in lowered or "network" in lowered or "disconnected" in lowered:
+    if "connect" in lowered or "network" in lowered or "disconnected" in lowered or "getaddrinfo" in lowered or "name or service not known" in lowered or "dns" in lowered:
         return {
             "errorType": "network",
-            "message": "Connection error while reaching the video API. Check your internet connection and retry.",
+            "message": "Connection error, check your network.",
         }
     if "500" in text or "503" in text or "server error" in lowered:
         return {
             "errorType": "api",
-            "message": "The video AI service returned a server error. Try again in a moment.",
+            "message": "API error",
         }
     return {
         "errorType": "api",
-        "message": f"API error while analyzing the video: {text or type(exc).__name__}",
+        "message": "API error",
     }
 
 
@@ -393,6 +393,36 @@ def _generate_json(prompt: str, schema: dict, timeout_s: float = 45.0):
         log.warning("Gemini caption generation unavailable: %s", exc)
         return None
     return _json_from_text(_extract_text(response.json()))
+
+
+def translate_cues(texts: list[str], label: str) -> Optional[list[str]]:
+    """The same cues in another language, one per input, or None.
+
+    Translation is the one thing a transcript cannot supply: the timings are
+    already heard and must not be touched, so this asks for text only, in the
+    same order and the same count, and the caller keeps every start/end it
+    already has.
+    """
+    lines = [str(text).strip() for text in texts if str(text).strip()]
+    if not lines or not available():
+        return None
+    schema = {
+        "type": "object",
+        "properties": {"lines": {"type": "array", "items": {"type": "string"}}},
+        "required": ["lines"],
+    }
+    prompt = (
+        f"Translate these on-video subtitle lines into {label}.\n"
+        f"Return exactly {len(lines)} lines, in the same order, one per input.\n"
+        "Keep each line as short as the original — it has to fit on a phone "
+        "screen — and do not add commentary, numbering or quotation marks.\n\n"
+        + "\n".join(lines)
+    )
+    data = _generate_json(prompt, schema)
+    if not isinstance(data, dict) or not isinstance(data.get("lines"), list):
+        return None
+    out = [str(item).strip() for item in data["lines"]]
+    return out if len(out) == len(lines) and all(out) else None
 
 
 def generate_text(prompt: str, timeout_s: float = 45.0) -> Optional[str]:

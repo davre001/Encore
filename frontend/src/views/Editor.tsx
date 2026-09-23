@@ -96,9 +96,11 @@ const UNPROMPTED_MIND_LINES = new Set([
 function isUnpromptedChatLine(message: Message): boolean {
   const text = message.text.trim();
   if (message.role === "you") {
+    if (text === "Stopped current editor action.") return true;
     return /^Export ".+" to device$/.test(text) || /^Share “.+” to YouTube$/.test(text);
   }
   if (message.role !== "mind") return false;
+  if (text.startsWith("Nothing was left mid-flight")) return true;
   if (UNPROMPTED_MIND_LINES.has(text)) return true;
   return (
     /^Kept “.+”\. Cut created in Cuts\.$/.test(text) ||
@@ -383,7 +385,7 @@ function timedOutAnalysisStatus(videoId: string): AnalysisStatus {
     videoId,
     stage: "error",
     message:
-      "The video AI is still working. If this keeps going, retry moments or use a shorter/lower-resolution clip.",
+      "Timeout error",
     errorType: "timeout",
     updatedAt: Date.now(),
     done: true,
@@ -752,6 +754,31 @@ export default function Editor() {
     }
   }
 
+  function persistProjectPatch(overrides: Partial<ProjectState>) {
+    void (async () => {
+      try {
+        const existingId = projectIdRef.current;
+        if (existingId) {
+          await api.updateProject(existingId, overrides);
+          setSaveStatus("saved");
+          return;
+        }
+        const saved = await api.saveProject(projectPayload(overrides));
+        if (saved?.id) {
+          projectIdRef.current = saved.id;
+          setProjectId(saved.id);
+          if (typeof window !== "undefined") {
+            const url = new URL(window.location.href);
+            url.searchParams.set("project", saved.id);
+            window.history.replaceState({}, "", url.toString());
+          }
+        }
+        setSaveStatus("saved");
+      } catch (err) {
+        console.warn("Immediate project save failed:", err);
+      }
+    })();
+  }
   // Auto-save project whenever take segments, clips, or effect options change
   useEffect(() => {
     if (isInitialLoad.current) return;
@@ -868,22 +895,22 @@ export default function Editor() {
       lower.includes("networkerror") ||
       lower.includes("load failed") ||
       lower.includes("internet disconnected") ||
+      lower.includes("getaddrinfo") ||
       lower.includes("connection")
     ) {
-      return `${prefix}: Connection error. Check your internet connection and try again.`;
+      return `${prefix}: Connection error, check your network.`;
     }
     if (lower.includes("econnrefused") || lower.includes("unable to connect")) {
-      return `${prefix}: Unable to reach Encore API. Make sure the backend is running and try again.`;
+      return `${prefix}: App server error`;
     }
-    if (lower.includes("api error")) {
-      return `${prefix}: ${raw}`;
+    if (lower.includes("api error") || lower.includes("500") || lower.includes("503")) {
+      return `${prefix}: API error`;
     }
-    if (lower.includes("the video ai could not finish this analysis")) {
-      return `${prefix}: API error while analyzing the video. Try again when the connection is stable.`;
+    if (lower.includes("video ai") && lower.includes("could not finish")) {
+      return `${prefix}: API error`;
     }
     return `${prefix}: ${raw}`;
   }
-
   function showStatus(text: string) {
     setStatusText(text);
   }
@@ -1053,7 +1080,7 @@ export default function Editor() {
           ...latestStatus,
           stage: "error",
           message:
-            "The video AI is still working. If this keeps going, retry moments or use a shorter/lower-resolution clip.",
+            "Timeout error",
           errorType: "timeout",
           updatedAt: Date.now(),
           done: true,
@@ -1174,33 +1201,46 @@ export default function Editor() {
   }
 
   async function autoApproveMoments(nextMoments: Moment[]) {
-    const pending = rankMoments(
+    const rankedPending = rankMoments(
       nextMoments.filter((moment) => moment.status === "pending"),
-    ).slice(0, 3);
+    );
+    const bestMoment = rankedPending[0] ?? null;
+    const momentsToSkip = rankedPending.slice(1);
     const vidId = video?.id || nextMoments[0]?.videoId;
-    if (!pending.length && !vidId) return;
+    if (!bestMoment && !vidId) return;
     setBusy(true);
 
     try {
       let nextClips: Clip[] = [];
+      const decidedMoments: Moment[] = [];
       const acceptedMoments: Moment[] = [];
-      let index = 0;
-      for (const moment of pending) {
+      if (bestMoment) {
         if (stoppedActionRef.current) return;
-        index += 1;
         setActionProgress({
-          label: `Cutting "${moment.label}" (${index} of ${pending.length})`,
-          percent: 60 + Math.round(((index - 1) / pending.length) * 24),
+          label: `Cutting best moment: "${bestMoment.label}"`,
+          percent: 62,
         });
-        const updated = await api.decideMoment(moment.id, "accept");
+        const updated = await api.decideMoment(bestMoment.id, "accept");
+        decidedMoments.push(updated);
         acceptedMoments.push(updated);
       }
-      const momentsForPick = acceptedMoments.length
+
+      for (const moment of momentsToSkip) {
+        if (stoppedActionRef.current) return;
+        setActionProgress({
+          label: `Skipping weaker moment: "${moment.label}"`,
+          percent: 72,
+        });
+        const updated = await api.decideMoment(moment.id, "reject");
+        decidedMoments.push(updated);
+      }
+
+      const momentsForPick = decidedMoments.length
         ? nextMoments.map(
-            (moment) => acceptedMoments.find((item) => item.id === moment.id) ?? moment,
+            (moment) => decidedMoments.find((item) => item.id === moment.id) ?? moment,
           )
         : nextMoments;
-      if (acceptedMoments.length) {
+      if (decidedMoments.length) {
         setMoments(momentsForPick);
       }
 
@@ -1210,7 +1250,10 @@ export default function Editor() {
         serverClipIds.current = new Set(nextClips.map((clip) => clip.id));
       }
 
-      const bestClip = pickBestClip(nextClips, momentsForPick);
+      const chosenMomentId = acceptedMoments[0]?.id;
+      const bestClip =
+        (chosenMomentId ? nextClips.find((clip) => clip.momentId === chosenMomentId) : null) ??
+        pickBestClip(nextClips, momentsForPick);
       if (!bestClip || bestClip.posted) return;
 
       setSelectedClipId(bestClip.id);
@@ -1707,24 +1750,6 @@ export default function Editor() {
     }
   }
 
-  function handleRecut(clipId: string) {
-    const clip = clips.find((c) => c.id === clipId);
-    if (!clip) return;
-    const recut: Clip = {
-      ...clip,
-      id: uid("clip"),
-      title: "Nobody talks about the 2 a.m. spiral.",
-      caption:
-        "Nobody talks about the 2 a.m. spiral.\n\nSame moment. New open. Story-first.",
-      hashtags: ["#studyvlog", "#recut", "#encore", "#shorts"],
-      posted: false,
-      postId: undefined,
-      postUrl: undefined,
-    };
-    commit([recut, ...clips]);
-    setSelectedClipId(recut.id);
-  }
-
   /* ---- Take: edit the main clip (the take), not a cut ---- */
 
   function makeTakeClip(start: number, end: number, label: string): Clip {
@@ -1887,6 +1912,14 @@ export default function Editor() {
     nextEnd: number,
     mode?: "move" | "trim-l" | "trim-r"
   ) {
+    const existingIndex = takeSegments.findIndex((s) => s.id === takeId);
+    if (existingIndex === -1) {
+      if (mode === "trim-l" || mode === "trim-r") {
+        handleTakeTrim(nextStart, nextEnd);
+      }
+      return;
+    }
+
     rememberTakeEdit();
     setTakeSegments((prev) => {
       const segIndex = prev.findIndex((s) => s.id === takeId);
@@ -1924,7 +1957,9 @@ export default function Editor() {
           start: nextStart,
           end: nextEnd,
         };
-        return prev.map((s) => (s.id === takeId ? updatedTarget : s));
+        const moved = prev.map((s) => (s.id === takeId ? updatedTarget : s));
+        persistProjectPatch({ takeSegments: moved });
+        return moved;
       }
 
       // Automatically move to the left side, aligning with the start of the timeline
@@ -1939,6 +1974,11 @@ export default function Editor() {
       if (last && last.sourceEnd !== undefined) {
         setTakeOut(last.sourceEnd);
       }
+      persistProjectPatch({
+        takeIn: first?.sourceStart ?? takeIn,
+        takeOut: last?.sourceEnd ?? takeOut,
+        takeSegments: aligned,
+      });
 
       return aligned;
     });
@@ -1949,32 +1989,31 @@ export default function Editor() {
     setTakeIn(nextIn);
     setTakeOut(nextOut);
     const dur = Math.max(nextOut - nextIn, 0.2);
-    setTakeSegments((prev) => {
-      if (prev.length <= 1) {
-        const title = prev[0]?.title || projectName || "Main take";
-        return [
-          {
-            id: prev[0]?.id || uid("take"),
-            title,
-            start: 0,
-            end: dur,
-            sourceStart: nextIn,
-            sourceEnd: nextOut,
-          },
-        ];
-      }
-      const targetId = selectedTakeId || prev[0].id;
-      const nextList = prev.map((s) =>
-        s.id === targetId
-          ? {
-              ...s,
+    const nextSegments =
+      takeSegments.length <= 1
+        ? [
+            {
+              id: takeSegments[0]?.id || uid("take"),
+              title: takeSegments[0]?.title || projectName || "Main take",
+              start: 0,
+              end: dur,
               sourceStart: nextIn,
               sourceEnd: nextOut,
-            }
-          : s
-      );
-      return alignSegmentsToLeft(nextList);
-    });
+            },
+          ]
+        : alignSegmentsToLeft(
+            takeSegments.map((s) =>
+              s.id === (selectedTakeId || takeSegments[0].id)
+                ? {
+                    ...s,
+                    sourceStart: nextIn,
+                    sourceEnd: nextOut,
+                  }
+                : s,
+            ),
+          );
+    setTakeSegments(nextSegments);
+    persistProjectPatch({ takeIn: nextIn, takeOut: nextOut, takeSegments: nextSegments });
     setTime(0);
     seek(0);
   }
@@ -2154,13 +2193,13 @@ export default function Editor() {
   function onTakeAction(action: ClipMenuAction) {
     switch (action) {
       case "split":
-        handleSplit();
+        if (clips.length === 0) handleSplit();
         break;
       case "trim":
-        trimTake();
+        if (clips.length === 0) trimTake();
         break;
       case "duplicate":
-        duplicateTake();
+        if (clips.length === 0) duplicateTake();
         break;
       case "delete":
         deleteTakeSegment(selectedTakeId);
@@ -2249,16 +2288,16 @@ export default function Editor() {
         deleteSelected();
         break;
       case "cut":
-        handleSplit();
+        if (clips.length === 0) handleSplit();
         break;
       case "captions":
         void generateCaptionsFromTransport();
         break;
       case "trim-left":
-        trimTakeToPlayhead("left");
+        if (clips.length === 0) trimTakeToPlayhead("left");
         break;
       case "trim-right":
-        trimTakeToPlayhead("right");
+        if (clips.length === 0) trimTakeToPlayhead("right");
         break;
     }
   }
@@ -2470,8 +2509,6 @@ export default function Editor() {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(stoppedActionKey(projectId), "1");
     }
-    const target = threadId;
-    await api.saveEditorEvent(target, "Stopped current editor action.", "you").catch(() => null);
   }
 
   function clearStoppedAction() {
@@ -2589,10 +2626,14 @@ export default function Editor() {
             ? latestStatus
             : await api.getAnalysisStatus(video.id).catch(() => null);
         if (finalStatus) setAnalysisStatus(finalStatus);
-        pushMind(
-          finalStatus?.message ??
-            "I regenerated the video, but no strong standalone moments were found.",
-        );
+        if (finalStatus?.stage === "error" || finalStatus?.errorType) {
+          showStatus(finalStatus.message);
+        } else {
+          pushMind(
+            finalStatus?.message ??
+              "I regenerated the video, but no strong standalone moments were found.",
+          );
+        }
       }
     } catch (err: any) {
       const message = `Regeneration failed: ${err.message || err}`;
@@ -2688,12 +2729,12 @@ export default function Editor() {
         (moment) => moment.status === "accepted" && !existingMomentIds.has(moment.id),
       );
       const pending = workingMoments.filter((moment) => moment.status === "pending");
-      // Strongest beats first, so the three we take are the best three, not the earliest three.
-      const toAccept = rankMoments([...missingAccepted, ...pending]).slice(0, 3);
+      // Strongest beat first: auto-mode should create one best cut, not a batch.
+      const toAccept = rankMoments([...missingAccepted, ...pending]).slice(0, 1);
 
       if (toAccept.length > 0) {
-        setActionProgress({ label: `Preparing ${toAccept.length} moment${toAccept.length === 1 ? "" : "s"}`, percent: 48 });
-        pushMind(`Loading ${toAccept.length} best moment${toAccept.length === 1 ? "" : "s"} into the timeline now.`);
+        setActionProgress({ label: "Preparing the best moment", percent: 48 });
+        pushMind("Loading the best moment into the timeline now.");
         const accepted: Moment[] = [];
         for (const moment of toAccept) {
           if (stoppedActionRef.current) return;
@@ -2710,9 +2751,24 @@ export default function Editor() {
             serverClipIds.current = new Set(workingClips.map((clip) => clip.id));
           }
         }
-        if (accepted.length > 0) {
+        const selectedIds = new Set(toAccept.map((moment) => moment.id));
+        const skipped: Moment[] = [];
+        for (const moment of pending) {
+          if (selectedIds.has(moment.id)) continue;
+          if (stoppedActionRef.current) return;
+          try {
+            skipped.push(await api.decideMoment(moment.id, "reject"));
+          } catch {
+            // A skipped weaker beat is not blocking; leave it pending if the API hiccups.
+          }
+        }
+        const decided = [...accepted, ...skipped];
+        if (decided.length > 0) {
           setMoments((prev) =>
-            prev.map((moment) => accepted.find((item) => item.id === moment.id) ?? moment),
+            prev.map((moment) => decided.find((item) => item.id === moment.id) ?? moment),
+          );
+          workingMoments = workingMoments.map(
+            (moment) => decided.find((item) => item.id === moment.id) ?? moment,
           );
         }
       }
@@ -2944,8 +3000,9 @@ export default function Editor() {
         return;
       }
 
-      // Stage 2 — every moment was decided, but a cut never reached YouTube.
-      const drafts = serverClips.filter((clip) => !clip.posted);
+      // Stage 2 - every moment was decided, but no cut reached YouTube yet.
+      const hasPostedClip = serverClips.some((clip) => clip.posted);
+      const drafts = hasPostedClip ? [] : serverClips.filter((clip) => !clip.posted);
       const best = pickBestClip(serverClips, serverMoments);
       if (best && drafts.length) {
         setTool("cuts");
@@ -2962,15 +3019,10 @@ export default function Editor() {
         return;
       }
 
-      // Stage 3 — nothing was in flight. Saying so plainly is the honest answer,
-      // and it is what stops the Mind from promising work that has no code behind
-      // it: "Processing the remaining 3 moments" was pure invention.
+      // Stage 3 - nothing was in flight. The loader already checked state; do
+      // not add a chat bubble after a finished publish or a no-op resume.
       setTool("cuts");
-      pushMind(
-        serverClips.length
-          ? "Nothing was left mid-flight — every moment has been decided and every cut is already on YouTube."
-          : "Nothing was left mid-flight — no moments are waiting on a decision and there are no cuts yet.",
-      );
+      return;
     } catch (err: any) {
       // The state read is idempotent, so saying "resume" again simply carries on
       // from wherever this attempt got to.
@@ -3009,7 +3061,8 @@ export default function Editor() {
     const uncutAccepted = moments.filter(
       (moment) => moment.status === "accepted" && !clipMomentIds.has(moment.id),
     );
-    const drafts = clips.filter((clip) => !clip.posted);
+    const hasPostedClip = clips.some((clip) => clip.posted);
+    const drafts = hasPostedClip ? [] : clips.filter((clip) => !clip.posted);
     if (!pending.length && !uncutAccepted.length && !drafts.length) return;
 
     const key = [
@@ -3246,7 +3299,7 @@ export default function Editor() {
   });
   kbRef.current = {
     split: () => {
-      handleSplit();
+      if (clips.length === 0) handleSplit();
     },
     del: () => {
       deleteSelected();
@@ -3423,8 +3476,8 @@ export default function Editor() {
             {saveStatus === "saving"
               ? "Auto-saving..."
               : saveStatus === "saved"
-                ? "Saved to history"
-                : "Auto-save active"}
+                ? "Saved"
+                : "Auto-save"}
           </span>
         </div>
 
@@ -3498,7 +3551,6 @@ export default function Editor() {
         onLoadInstalledFonts={loadInstalledFonts}
         onClipContext={openMenu}
         onSeek={seek}
-        onRecut={handleRecut}
         onDecideMoment={handleDecideMoment}
         onToolChange={setTool}
         onReanalyze={() => void reanalyzeTake()}
@@ -3576,7 +3628,7 @@ export default function Editor() {
                 onPause={() => setPlaying(false)}
                 onError={() => {
                   pushMind(
-                    "Couldn't load the saved take. Re-upload it from the Take panel to keep editing.",
+                    "Couldn't load the saved take. Try again!",
                   );
                 }}
               />
@@ -3645,7 +3697,7 @@ export default function Editor() {
           {busy ? (
             <p className="cut__scanning">
               <i aria-hidden="true" />
-              Reading the tape for standalone beats…
+            Reading the video for moments and captions…
             </p>
           ) : null}
         </div>
@@ -3657,6 +3709,7 @@ export default function Editor() {
           canEdit={!!video || !!mediaUrl || takeSegments.length > 0}
           canUndo={takePast.length > 0 || past.length > 0}
           canRedo={takeFuture.length > 0 || future.length > 0}
+          mainTakeLocked={clips.length > 0}
           aiPermissionMode={aiPermissionMode}
           fullscreen={fullscreen}
           onEdit={onTransportEdit}

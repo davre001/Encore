@@ -260,6 +260,53 @@ def get_analysis_status(video_id: str) -> Optional[dict]:
     return rows[-1] if rows else None
 
 
+# --- transcripts -----------------------------------------------------------
+def save_transcript(video_id: str, rows: list[dict]) -> list[dict]:
+    """Cache one video's word-level transcript, replacing any earlier copy.
+
+    Whisper is the slowest thing in the pipeline and it reads the whole take, so
+    the moments job — which already transcribes on upload — writes its result
+    here for the caption job to reuse. Without this, captioning a 20s cut
+    re-decodes the entire video, and the two features can disagree about when a
+    word was said.
+    """
+    record = {"videoId": video_id, "updatedAt": now_ms(), "rows": rows}
+    with _LOCK:
+        existing = [t for t in _read("transcripts") if t.get("videoId") != video_id]
+        existing.append(record)
+        _write("transcripts", existing)
+    return rows
+
+
+def get_transcript(video_id: str) -> Optional[list[dict]]:
+    """The cached transcript rows for a video, or None when it was never read."""
+    rows = _list_by("transcripts", "videoId", video_id)
+    if not rows:
+        return None
+    cached = rows[-1].get("rows")
+    return cached if isinstance(cached, list) else None
+
+
+# --- caption jobs ----------------------------------------------------------
+def save_caption_job(clip_id: str, job: dict) -> dict:
+    """Progress for one clip's caption generation, one record per clip."""
+    record = {
+        "clipId": clip_id,
+        "updatedAt": now_ms(),
+        **job,
+    }
+    with _LOCK:
+        rows = [j for j in _read("caption_jobs") if j.get("clipId") != clip_id]
+        rows.append(record)
+        _write("caption_jobs", rows)
+    return record
+
+
+def get_caption_job(clip_id: str) -> Optional[dict]:
+    rows = _list_by("caption_jobs", "clipId", clip_id)
+    return rows[-1] if rows else None
+
+
 # --- clips -----------------------------------------------------------------
 def save_clip(clip: dict) -> dict:
     return _insert("clips", clip)

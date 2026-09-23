@@ -45,6 +45,15 @@ function linkify(text: string) {
   );
 }
 
+function formatMessageTime(createdAt: number) {
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 type ToolPanelProps = {
   tool: ToolId;
   video: Video | null;
@@ -74,18 +83,17 @@ type ToolPanelProps = {
   onLoadInstalledFonts: () => void;
   onClipContext: (id: string, x: number, y: number) => void;
   onSeek: (seconds: number) => void;
-  onRecut: (id: string) => void;
   onDecideMoment: (id: string, decision: "accept" | "reject") => void;
   onToolChange?: (tool: ToolId) => void;
   onReanalyze?: () => void;
 };
 
 const HEADINGS: Record<ToolId, string> = {
-  take: "Take",
-  moments: "Moments",
-  cuts: "Cuts",
-  caption: "Captions",
-  mind: "Mind",
+  take: "TAKE",
+  moments: "MOMENTS",
+  cuts: "CUTS",
+  caption: "CAPTIONS",
+  mind: "MIND",
 };
 
 const CAPTION_LANGUAGES: { id: CaptionLanguage; label: string }[] = [
@@ -99,22 +107,38 @@ const CAPTION_LANGUAGES: { id: CaptionLanguage; label: string }[] = [
   { id: "hi", label: "Hindi" },
 ];
 
+function isStatusLine(text: string) {
+  const lower = text.toLowerCase().trim();
+  return (
+    lower === "api error" ||
+    lower === "timeout error" ||
+    lower === "rate limit error" ||
+    lower === "app server error" ||
+    lower.includes("api error") ||
+    lower.includes("connection error") ||
+    lower.includes("app server error") ||
+    lower.includes("timeout error") ||
+    lower.includes("rate limit error") ||
+    lower.includes("failed to reach encore mind") ||
+    (lower.includes("video ai") && lower.includes("could not finish"))
+  );
+}
 function displayAnalysisMessage(status: AnalysisStatus | null, hasVideo: boolean) {
   if (!status) return null;
   if (status.message.includes("video AI") && status.message.includes("could not finish")) {
     if (status.errorType === "network") {
-      return "Connection error. Check your internet connection and retry.";
+      return "Connection error, check your network.";
     }
-    return "API error while analyzing the video. Try again when the connection is stable.";
+    return "API error";
   }
   if (status.errorType === "network") {
-    return "Connection error. Check your internet connection and retry.";
+    return "Connection error, check your network.";
   }
   if (status.errorType === "api") {
-    return status.message.startsWith("API error") ? status.message : `API error: ${status.message}`;
+    return "API error";
   }
   if (status.errorType === "timeout") {
-    return "The analysis took too long. Retry when the connection is stable or use a shorter clip.";
+    return "Timeout error";
   }
   return status.message || (hasVideo ? "Analysis updates will appear here as the video is processed." : null);
 }
@@ -253,6 +277,12 @@ export default function ToolPanel(props: ToolPanelProps) {
       item.label.toLowerCase().includes(commandQuery)
     );
   });
+  const chatLocked =
+    props.chatBusy ||
+    props.busy ||
+    props.regeneratingMoments ||
+    !!props.actionProgress ||
+    (!!props.analysisStatus && !props.analysisStatus.done);
 
   useEffect(() => {
     if (tool !== "mind") return;
@@ -344,10 +374,10 @@ export default function ToolPanel(props: ToolPanelProps) {
               <div className="cut__row-actions">
                 <button
                   type="button"
-                  className="cut__mini"
+                  className="cut__mini cut__mini--danger"
                   onClick={props.onReset}
                 >
-                  Clear take
+                  Cancel take
                 </button>
               </div>
             </div>
@@ -495,7 +525,7 @@ export default function ToolPanel(props: ToolPanelProps) {
             clips.map((clip) => (
               <div
                 key={clip.id}
-                className={`cut__row${
+                className={`cut__row cut__row--clip-card${
                   clip.id === selectedClipId ? " is-selected" : ""
                 }`}
                 onContextMenu={(event) => {
@@ -504,8 +534,8 @@ export default function ToolPanel(props: ToolPanelProps) {
                   props.onClipContext(clip.id, event.clientX, event.clientY);
                 }}
               >
-                <div className="cut__row-top">
-                  <span className="cut__time">
+                <div className="cut__clip-card-head">
+                  <span className="cut__time cut__clip-card-time">
                     {formatSpan(clip.start, clip.end)}
                   </span>
                   {clip.posted ? (
@@ -514,15 +544,7 @@ export default function ToolPanel(props: ToolPanelProps) {
                 </div>
                 <button
                   type="button"
-                  className="cut__row-label"
-                  style={{
-                    border: 0,
-                    background: "none",
-                    color: "inherit",
-                    textAlign: "left",
-                    padding: 0,
-                    cursor: "pointer",
-                  }}
+                  className="cut__row-label cut__clip-card-title"
                   onClick={() => {
                     props.onPickClip(clip.id);
                     props.onSeek(clip.start);
@@ -530,27 +552,19 @@ export default function ToolPanel(props: ToolPanelProps) {
                 >
                   {clip.title}
                 </button>
-                <div className="cut__row-actions">
+                <div className="cut__row-actions cut__clip-card-actions">
                   <button
                     type="button"
                     className={
                       clip.id === selectedClipId
-                        ? "cut__mini cut__mini--keep"
+                        ? "cut__mini cut__mini--selected"
                         : "cut__mini"
                     }
+                    disabled={clip.posted && clip.id === selectedClipId}
                     onClick={() => props.onPickClip(clip.id)}
                   >
                     {clip.id === selectedClipId ? "Selected" : "Select"}
                   </button>
-                  {clip.posted ? (
-                    <button
-                      type="button"
-                      className="cut__mini"
-                      onClick={() => props.onRecut(clip.id)}
-                    >
-                      Recut
-                    </button>
-                  ) : null}
                 </div>
               </div>
             ))
@@ -639,7 +653,7 @@ export default function ToolPanel(props: ToolPanelProps) {
                 </div>
                 <button
                   type="button"
-                  className="cut__mini cut__mini--keep"
+                  className="cut__mini cut__mini--caption-action"
                   disabled={selectedClip.posted}
                   onClick={() =>
                     props.onGenerateCaptions(
@@ -715,31 +729,42 @@ export default function ToolPanel(props: ToolPanelProps) {
                   </div>
                 </div>
               ) : null}
-              {selectedClip.posted ? (
-                <p className="cut__hint">
-                  This cut is live — recut it to change the hook.
-                </p>
-              ) : null}
             </>
           )
         ) : null}
 
         {/* ---- Mind: the agent thread ---- */}
         {tool === "mind" ? (
-          <>
+          <div className="cut__mind-chat">
             <div className="cut__thread" role="log" aria-live="polite">
-              {props.messages.slice(-8).map((message) => (
-                <p
-                  key={message.id}
-                  className={`cut__bubble cut__bubble--${message.role}`}
-                >
-                  <b>{message.role === "mind" ? "Encore" : "You"}</b>
-                  {linkify(message.text)}
-                </p>
-              ))}
+              <p className="cut__thread-day">Today</p>
+              {props.messages.slice(-8).map((message) =>
+                message.role === "mind" && isStatusLine(message.text) ? (
+                  <p key={message.id} className="cut__thinking cut__status-text" aria-live="polite">
+                    {message.text}
+                  </p>
+                ) : (
+                  <p
+                    key={message.id}
+                    className={`cut__bubble cut__bubble--${message.role}`}
+                  >
+                    <span className="cut__bubble-meta">
+                      <b>{message.role === "mind" ? "Encore" : "You"}</b>
+                      <time dateTime={new Date(message.createdAt).toISOString()}>
+                        {formatMessageTime(message.createdAt)}
+                      </time>
+                    </span>
+                    <span className="cut__bubble-text">{linkify(message.text)}</span>
+                  </p>
+                ),
+              )}
               {props.chatBusy ? (
                 <p className="cut__thinking" aria-live="polite">
                   Thinking...
+                </p>
+              ) : props.statusText ? (
+                <p className="cut__thinking cut__status-text" aria-live="polite">
+                  {props.statusText}
                 </p>
               ) : null}
             </div>
@@ -748,6 +773,10 @@ export default function ToolPanel(props: ToolPanelProps) {
               onSubmit={(event: FormEvent) => {
                 event.preventDefault();
                 const next = props.prompt.trim();
+                if (chatLocked) {
+                  props.onStopAction();
+                  return;
+                }
                 if (next) props.onSend(next);
               }}
             >
@@ -779,17 +808,24 @@ export default function ToolPanel(props: ToolPanelProps) {
                 ref={askInputRef}
                 value={props.prompt}
                 onChange={(event) => props.onPrompt(event.target.value)}
-                placeholder="Ask Encore…"
+                placeholder={chatLocked ? "Encore is working..." : "Ask Encore..."}
                 aria-label="Ask Encore"
+                disabled={chatLocked}
               />
-              <button type="submit" aria-label="Send">
-                <ArrowUp aria-hidden="true" />
+              <button
+                type="submit"
+                className={chatLocked ? "cut__ask-stop" : undefined}
+                aria-label={chatLocked ? "Stop response" : "Send"}
+                title={chatLocked ? "Stop response" : "Send"}
+              >
+                {chatLocked ? <Square aria-hidden="true" /> : <ArrowUp aria-hidden="true" />}
               </button>
             </form>
-          </>
+          </div>
         ) : null}
       </div>
     </section>
   );
 }
+
 
