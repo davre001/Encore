@@ -277,12 +277,7 @@ export default function ToolPanel(props: ToolPanelProps) {
       item.label.toLowerCase().includes(commandQuery)
     );
   });
-  const chatLocked =
-    props.chatBusy ||
-    props.busy ||
-    props.regeneratingMoments ||
-    !!props.actionProgress ||
-    (!!props.analysisStatus && !props.analysisStatus.done);
+  const chatLocked = props.chatBusy;
 
   useEffect(() => {
     if (tool !== "mind") return;
@@ -808,7 +803,7 @@ export default function ToolPanel(props: ToolPanelProps) {
                 ref={askInputRef}
                 value={props.prompt}
                 onChange={(event) => props.onPrompt(event.target.value)}
-                placeholder={chatLocked ? "Encore is working..." : "Ask Encore..."}
+                placeholder={chatLocked ? "Thinking..." : "Ask Encore..."}
                 aria-label="Ask Encore"
                 disabled={chatLocked}
               />
