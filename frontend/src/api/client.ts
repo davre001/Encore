@@ -3,6 +3,7 @@ import type {
   AnalysisStatus,
   AiSettings,
   AuthSession,
+  CaptionJob,
   CaptionLanguage,
   CaptionTrack,
   Clip,
@@ -289,7 +290,11 @@ export async function removeClipHashtag(
   return handleResponse<Clip>(res);
 }
 
-/** Generate timed on-video captions for a clip. */
+/** Start generating timed on-video captions for a clip.
+ *
+ * Returns the job, not the captions: reading the take through whisper is far
+ * too slow to hold a request open for with nothing on screen, so the caller
+ * polls `getCaptionJob` and shows the progress it reports. */
 export async function generateCaptionTrack(input: {
   clipId: string;
   videoId?: string;
@@ -298,13 +303,24 @@ export async function generateCaptionTrack(input: {
   start: number;
   end: number;
   language: CaptionLanguage;
-}): Promise<CaptionTrack> {
+  /** The frame the captions are drawn into, so cues are budgeted to fit it. */
+  aspect: string;
+}): Promise<CaptionJob> {
   const res = await fetch(`${API}/captions/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...userHeaders() },
     body: JSON.stringify(input),
   });
-  return handleResponse<CaptionTrack>(res);
+  return handleResponse<CaptionJob>(res);
+}
+
+/** Where a clip's caption run has got to. */
+export async function getCaptionJob(clipId: string): Promise<CaptionJob> {
+  const res = await fetch(
+    `${API}/captions/${encodeURIComponent(clipId)}/job`,
+    { headers: userHeaders() }
+  );
+  return handleResponse<CaptionJob>(res);
 }
 
 /** Publish a clip to YouTube. */

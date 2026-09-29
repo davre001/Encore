@@ -24,6 +24,10 @@ _SENTENCE_END = re.compile(r"[.!?…]$")
 # A cue stops growing here even with no pause to justify it, so a fast talker
 # never gets a wall of text. The word cap is the frame's own budget (below).
 MAX_CUE_SECONDS = 3.6
+# No cue is split so finely that a part cannot stand on its own: a single
+# orphaned word flickering at the end of a phrase reads as a glitch, and it is
+# what a naive time-based split produces.
+MIN_PART_WORDS = 2
 
 # Words per line by frame shape. Portrait frames are narrow: a long line either
 # shrinks to unreadable or spills, so the budget is deliberately small.
@@ -97,54 +101,83 @@ def flatten(rows: list[dict], start: float, end: float) -> list[dict]:
     return out
 
 
-def _closes_a_beat(word: dict, next_word: dict | None, first: dict) -> bool:
-    """Whether the cue should end after `word`."""
+def _closes_a_beat(word: dict, next_word: dict | None) -> bool:
+    """Whether the speaker has finished a beat after `word`.
+
+    Only the voice decides this — a pause, or the end of a sentence. Running
+    long is handled later by the budget split, which can weigh a whole run at
+    once instead of guessing at it word by word.
+    """
     if _SENTENCE_END.search(word["text"]):
         return True
     if next_word is None:
         return True
-    if next_word["start"] - word["end"] >= PAUSE_BREAK:
-        return True
-    if word["end"] - first["start"] >= MAX_CUE_SECONDS:
-        return True
-    return False
+    return next_word["start"] - word["end"] >= PAUSE_BREAK
+
+
+def _span(words: list[dict]) -> float:
+    return float(words[-1]["end"]) - float(words[0]["start"])
 
 
 def _split_to_budget(words: list[dict], budget: int) -> list[list[dict]]:
-    """Break an over-long beat in two, at the strongest pause.
+    """Break an over-long beat into parts that fit the frame and the clock.
 
-    Long beats happen: someone talks through a sentence for eight seconds. The
-    break goes at the biggest gap, and between equal gaps the one nearest the
-    middle, so the halves read as phrases rather than as an arbitrary cut.
+    A run is cut at its biggest internal pause, and between equal gaps at the
+    one nearest the middle of the run — which is what turns a long uniform
+    sentence into even halves rather than a short head and a long tail. No cut
+    ever leaves fewer than MIN_PART_WORDS on either side: a cue that would
+    strand one word keeps the word instead.
+
+    The frame's word budget is the hard limit; the clock is a preference. When
+    someone speaks slowly enough that no cut inside the budget also lands
+    inside the clock, the words win — a cue that stays up as long as it takes
+    to say is better than one split into unusable fragments.
     """
     parts: list[list[dict]] = []
     remaining = words
-    while len(remaining) > budget:
-        midpoint = len(remaining) / 2
-        gaps = [
-            (remaining[i + 1]["start"] - remaining[i]["end"], i)
-            for i in range(len(remaining) - 1)
+    while len(remaining) > budget or _span(remaining) > MAX_CUE_SECONDS:
+        count = len(remaining)
+        # Hardest limit: what the frame can hold, keeping a usable tail back.
+        room = min(budget, count - MIN_PART_WORDS)
+        in_time = [
+            index
+            for index in range(MIN_PART_WORDS, room + 1)
+            if remaining[index - 1]["end"] - remaining[0]["start"] <= MAX_CUE_SECONDS
         ]
-        _, index = max(
-            gaps,
-            key=lambda item: (round(item[0], 2), -abs(item[1] - midpoint)),
-        )
-        parts.append(remaining[: index + 1])
-        remaining = remaining[index + 1 :]
+        if in_time:
+            room = max(in_time)
+        if room < MIN_PART_WORDS:
+            break  # too little left to split without stranding a word
+
+        window = remaining[:room]
+        midpoint = count / 2
+        gaps = [
+            (window[i + 1]["start"] - window[i]["end"], i + 1)
+            for i in range(MIN_PART_WORDS - 1, len(window) - 1)
+        ]
+        if gaps:
+            _, cut = max(
+                gaps,
+                key=lambda item: (round(item[0], 2), -abs(item[1] - midpoint)),
+            )
+        else:
+            cut = room
+        parts.append(remaining[:cut])
+        remaining = remaining[cut:]
     if remaining:
         parts.append(remaining)
     return parts
 
 
 def group_into_beats(words: list[dict], aspect: str) -> list[list[dict]]:
-    """Split words into cue-sized beats: pause, punctuation, length, then budget."""
+    """Split words into cue-sized beats: pause and punctuation, then budget."""
     budget = _budget(aspect)
     beats: list[list[dict]] = []
     current: list[dict] = []
     for index, word in enumerate(words):
         current.append(word)
         nxt = words[index + 1] if index + 1 < len(words) else None
-        if _closes_a_beat(word, nxt, current[0]):
+        if _closes_a_beat(word, nxt):
             beats.append(current)
             current = []
     if current:
@@ -152,7 +185,7 @@ def group_into_beats(words: list[dict], aspect: str) -> list[list[dict]]:
 
     out: list[list[dict]] = []
     for beat in beats:
-        out.extend(_split_to_budget(beat, budget) if len(beat) > budget else [beat])
+        out.extend(_split_to_budget(beat, budget))
     return [beat for beat in out if beat]
 
 

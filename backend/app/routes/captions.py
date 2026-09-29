@@ -119,6 +119,22 @@ def _from_words(rows: list[dict], body: CaptionGenerateRequest) -> list[dict]:
     ]
 
 
+def _spread_words(start: float, end: float, text: str) -> list[dict]:
+    """Word timings for a cue whose words were never heard.
+
+    A guestimate still beats steady: the preview lights the word being spoken, so
+    a cue with no word times would sit as one flat line while every cue around it
+    moves. These are spread evenly across the cue, and the track is reported as
+    estimated, so nobody is told they came from the audio.
+    """
+    parts = [part for part in text.split() if part]
+    step = (end - start) / max(len(parts), 1)
+    return [
+        {"start": start + step * index, "end": start + step * (index + 1), "text": part}
+        for index, part in enumerate(parts)
+    ]
+
+
 def _estimated_segments(body: CaptionGenerateRequest, transcript: list[dict]) -> list[dict]:
     """Timings we did not hear: real transcript rows, or a split of the copy.
 
@@ -163,21 +179,13 @@ def _estimated_segments(body: CaptionGenerateRequest, transcript: list[dict]) ->
     for idx, text in enumerate(chunks):
         a = body.start + step * idx
         b = body.end if idx == len(chunks) - 1 else body.start + step * (idx + 1)
-        parts = [part for part in text.split() if part]
-        word_step = (b - a) / max(len(parts), 1)
+        line = text if body.language == "en" else f"[{label}] {text}"
         out.append(
             {
                 "start": a,
                 "end": b,
-                "text": text if body.language == "en" else f"[{label}] {text}",
-                "words": [
-                    {
-                        "start": a + word_step * i,
-                        "end": a + word_step * (i + 1),
-                        "text": part,
-                    }
-                    for i, part in enumerate(parts)
-                ],
+                "text": line,
+                "words": _spread_words(a, b, line),
             }
         )
     return out
@@ -228,7 +236,12 @@ def _build_caption_track(body: CaptionGenerateRequest) -> None:
                         "start": item["start"],
                         "end": item["end"],
                         "text": item["text"],
-                        "words": [],
+                        # The model writes the words and their cue's span; it is
+                        # never asked for the timing inside the line, so the
+                        # words are spread across the cue it gave them.
+                        "words": _spread_words(
+                            float(item["start"]), float(item["end"]), str(item["text"])
+                        ),
                     }
                     for item in proposed
                 ]

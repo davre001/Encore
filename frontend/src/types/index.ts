@@ -124,6 +124,10 @@ export type Video = {
   name: string;
   duration: number;
   createdAt: number;
+  /** Source dimensions when the server could read them; the import uses the
+   *  ratio to open the take in its own aspect instead of assuming 16:9. */
+  width?: number | null;
+  height?: number | null;
 };
 
 export type TakeSegment = {
@@ -145,12 +149,25 @@ export type CaptionLanguage =
   | "ar"
   | "hi";
 
+/** One spoken word on the timeline — what lets the preview light up the word
+ *  being said instead of guessing where inside a line the speaker has got to. */
+export type CaptionWord = {
+  start: number;
+  end: number;
+  text: string;
+};
+
 export type CaptionSegment = {
   id: string;
   start: number;
   end: number;
   text: string;
+  /** Empty for a cue typed by hand or estimated without an audio read. */
+  words?: CaptionWord[];
 };
+
+/** Whether a track's timings were heard, or distributed by the builder. */
+export type CaptionSource = "speech" | "estimated";
 
 export type CaptionTrack = {
   id: string;
@@ -159,6 +176,25 @@ export type CaptionTrack = {
   fontFamily: string;
   fontSource?: string;
   segments: CaptionSegment[];
+  source?: CaptionSource;
+};
+
+/** Progress for a caption run. `progress` is the share of the audio actually
+ *  decoded, not a timer — the editor's loader follows this. */
+export type CaptionJob = {
+  clipId: string;
+  stage:
+    | "queued"
+    | "transcribing"
+    | "beats"
+    | "fitting"
+    | "complete"
+    | "error";
+  message: string;
+  progress: number;
+  done: boolean;
+  error?: string | null;
+  track?: CaptionTrack | null;
 };
 
 export type ProjectEffects = {

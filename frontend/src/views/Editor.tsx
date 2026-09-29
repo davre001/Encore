@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -24,6 +25,7 @@ import ClipContextMenu, {
 } from "@/components/editor/ClipContextMenu";
 import type {
   AnalysisStatus,
+  CaptionJob,
   CaptionLanguage,
   CaptionTrack,
   Clip,
@@ -221,12 +223,29 @@ function buildCaptionSegments(
   const lines = chunks.length > 0 ? chunks : [clip.title || "Caption"];
   const span = Math.max(clip.end - clip.start, 0.5);
   const step = span / lines.length;
-  return lines.map((text, index) => ({
-    id: uid("capseg"),
-    start: clip.start + step * index,
-    end: index === lines.length - 1 ? clip.end : clip.start + step * (index + 1),
-    text: language === "en" ? text : `[${CAPTION_LANGUAGE_LABELS[language]}] ${text}`,
-  }));
+  return lines.map((text, index) => {
+    const start = clip.start + step * index;
+    const end = index === lines.length - 1 ? clip.end : clip.start + step * (index + 1);
+    const line = language === "en" ? text : `[${CAPTION_LANGUAGE_LABELS[language]}] ${text}`;
+    // Nothing was heard here, so the words are spread evenly across the cue.
+    // They still get times because the preview lights the word being said: a
+    // cue without them would render as one flat line while every cue around it
+    // beats. The panel reports the track as estimated so no one is told these
+    // times came from the audio.
+    const pieces = line.split(" ").filter(Boolean);
+    const wordStep = (end - start) / Math.max(pieces.length, 1);
+    return {
+      id: uid("capseg"),
+      start,
+      end,
+      text: line,
+      words: pieces.map((piece, position) => ({
+        start: start + wordStep * position,
+        end: start + wordStep * (position + 1),
+        text: piece,
+      })),
+    };
+  });
 }
 
 function isMomentRegenerationPrompt(text: string) {
@@ -393,34 +412,102 @@ function timedOutAnalysisStatus(videoId: string): AnalysisStatus {
 }
 
 /**
- * Read a file's real duration off a throwaway <video>, so the timeline can lay
- * the take and its cuts out at true time. Resolves 0 (→ the caller falls back
- * to a stored guess) when the file has no readable metadata, and never hangs —
- * a 6s guard resolves 0.
+ * Read a file's real duration and pixel size off a throwaway <video>, so the
+ * timeline can lay the take out at true time and the frame can open at the
+ * take's own shape instead of assuming 16:9. Resolves zeros (→ the caller falls
+ * back to a stored guess) when the file has no readable metadata, and never
+ * hangs — a 6s guard resolves.
  */
-function probeDuration(url: string): Promise<number> {
+function probeMedia(url: string): Promise<{ duration: number; width: number; height: number }> {
   return new Promise((resolve) => {
+    const empty = { duration: 0, width: 0, height: 0 };
     if (typeof document === "undefined") {
-      resolve(0);
+      resolve(empty);
       return;
     }
     const video = document.createElement("video");
     let done = false;
-    const finish = (value: number) => {
+    const finish = (value: { duration: number; width: number; height: number }) => {
       if (done) return;
       done = true;
       window.clearTimeout(timer);
       video.removeAttribute("src");
-      resolve(Number.isFinite(value) && value > 0 ? value : 0);
+      resolve({
+        duration: Number.isFinite(value.duration) && value.duration > 0 ? value.duration : 0,
+        width: value.width > 0 ? value.width : 0,
+        height: value.height > 0 ? value.height : 0,
+      });
     };
-    const timer = window.setTimeout(() => finish(0), 6000);
+    const timer = window.setTimeout(() => finish(empty), 6000);
     video.preload = "metadata";
     video.muted = true;
-    video.onloadedmetadata = () => finish(video.duration);
-    video.onerror = () => finish(0);
+    video.onloadedmetadata = () =>
+      finish({
+        duration: video.duration,
+        width: video.videoWidth,
+        height: video.videoHeight,
+      });
+    video.onerror = () => finish(empty);
     video.src = url;
   });
 }
+
+/**
+ * The preset whose shape is closest to the imported video's own.
+ *
+ * Snapping rather than inventing a seventh ratio keeps every frame the menu
+ * can show, and every path that renders or exports one, unchanged. Compared in
+ * ratio space, not pixels, so 1080×1920 and 2160×3840 both land on 9:16.
+ */
+function nearestAspect(width: number, height: number): string | null {
+  if (!width || !height) return null;
+  const ratio = width / height;
+  let best = ASPECTS[0];
+  for (const item of ASPECTS) {
+    if (Math.abs(Math.log(item.n / ratio)) < Math.abs(Math.log(best.n / ratio))) {
+      best = item;
+    }
+  }
+  return best.id;
+}
+
+/** How long a caption run may take before the editor stops waiting on it.
+ *
+ * Reading a long take through whisper is genuinely slow, but a bar that never
+ * resolves is worse than one that gives up and falls back to the estimate.
+ */
+const CAPTION_JOB_TIMEOUT_MS = 240_000;
+const CAPTION_JOB_POLL_MS = 700;
+
+/**
+ * Follow a caption job until it finishes, reporting each stage it publishes.
+ *
+ * Returns the finished track, or null when the run errored or timed out.
+ * `stopped` is reported separately because the two are not the same thing: a
+ * cancelled run must leave the panel exactly as it was, while a failed one
+ * falls back to the local estimate.
+ */
+async function pollCaptionJob(
+  clipId: string,
+  onProgress: (job: CaptionJob) => void,
+  isStopped: () => boolean,
+): Promise<{ track: CaptionTrack | null; stopped: boolean }> {
+  const deadline = Date.now() + CAPTION_JOB_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, CAPTION_JOB_POLL_MS));
+    if (isStopped()) return { track: null, stopped: true };
+    try {
+      const job = await api.getCaptionJob(clipId);
+      onProgress(job);
+      if (job.done) return { track: job.track ?? null, stopped: false };
+    } catch {
+      // A dropped poll says nothing about the job itself — the backend is
+      // still reading the take. Keep following it.
+    }
+  }
+  return { track: null, stopped: false };
+}
+
 
 type MenuState = {
   kind: "clip" | "take";
@@ -534,6 +621,12 @@ export default function Editor() {
   const projectLoadToken = useRef(0);
   const projectIdRef = useRef<string | null>(null);
   const resumePlayhead = useRef<number | null>(null);
+  // Set when the frame's ratio is a human's or a saved project's choice. An
+  // import detects the take's own shape only while this is still false, so
+  // "unless the user chooses to change it" holds across a reload too.
+  const aspectChosen = useRef(false);
+  // Pixel size read off the imported file, for the Take panel's note.
+  const [importedShape, setImportedShape] = useState<{ width: number; height: number } | null>(null);
   // Which project the messages on screen came from, so the loader can tell a
   // reload of the current thread (merge) from a move to another one (replace).
   const openThread = useRef<string | null>(null);
@@ -541,6 +634,9 @@ export default function Editor() {
   // is yes or no to that question, not a new instruction.
   const pendingManualConfirm = useRef<string | null>(null);
   const pendingSelectedPublish = useRef<string | null>(null);
+  const publishingClipIds = useRef<Set<string>>(new Set());
+  const publishedClipIds = useRef<Set<string>>(new Set());
+  const publishedMessageKeys = useRef<Set<string>>(new Set());
 
   /** The chat thread this session talks into: the project, and only the project.
    *
@@ -601,7 +697,12 @@ export default function Editor() {
         if (proj.effects) {
           if (proj.effects.rotate !== undefined) setPreviewRotate(proj.effects.rotate);
           if (proj.effects.flip !== undefined) setPreviewFlip(proj.effects.flip);
-          if (proj.effects.aspect) setAspect(proj.effects.aspect);
+          if (proj.effects.aspect) {
+            setAspect(proj.effects.aspect);
+            // A stored ratio is someone's decision (or a detection already made
+            // for this project) — a later import must not quietly replace it.
+            aspectChosen.current = true;
+          }
           if (proj.effects.aiOn !== undefined) setAiOn(proj.effects.aiOn);
           if (proj.effects.compareOn !== undefined) setCompareOn(proj.effects.compareOn);
           if (proj.effects.captionTracks) {
@@ -1004,19 +1105,31 @@ export default function Editor() {
     const url = URL.createObjectURL(file);
     setMediaUrl(url);
 
-    const probed = await probeDuration(url);
+    const probed = await probeMedia(url);
+    // The take opens in its own shape. A ratio the creator picked — or one a
+    // saved project restored — stands instead; only an untouched frame follows
+    // the file.
+    if (!aspectChosen.current) {
+      const detected = nearestAspect(probed.width, probed.height);
+      if (detected) setAspect(detected);
+    }
+    setImportedShape(
+      probed.width && probed.height
+        ? { width: probed.width, height: probed.height }
+        : null,
+    );
     const initialTake: TakeSegment = {
       id: uid("take"),
       title: stem(file.name) || "Main take",
       start: 0,
-      end: probed,
+      end: probed.duration,
       sourceStart: 0,
-      sourceEnd: probed,
+      sourceEnd: probed.duration,
     };
     setTakeSegments([initialTake]);
     setSelectedTakeId(initialTake.id);
     setTakeIn(0);
-    setTakeOut(probed);
+    setTakeOut(probed.duration);
     setProjectName(importedName);
     setSelection("take");
     // Nothing is said here. An upload is a file being handed over, not a
@@ -1366,40 +1479,72 @@ export default function Editor() {
     language: CaptionLanguage;
   }) {
     const existing = captionTracks.find((track) => track.clipId === input.clipId);
-    let nextTrack: CaptionTrack;
+    // Asking for captions is starting work, so a stop from an earlier action is
+    // no longer in force; from here the stop button cancels this run instead.
+    clearStoppedAction();
+    setActionProgress({ label: "Queuing the caption run.", percent: 5 });
+
+    let adopted: CaptionTrack | null = null;
     try {
-      const generated = await api.generateCaptionTrack({
+      const queued = await api.generateCaptionTrack({
         ...input,
         videoId: video?.id,
+        aspect,
       });
-      nextTrack = {
-        ...generated,
-        id: existing?.id ?? generated.id,
-        fontFamily: existing?.fontFamily ?? generated.fontFamily,
-        fontSource: existing?.fontSource ?? generated.fontSource,
-      };
+      setActionProgress({ label: queued.message, percent: queued.progress });
+
+      // Reading the take through whisper takes far too long to hold a request
+      // open for, so the job runs on the server and the bar follows its
+      // progress: the share of the audio actually decoded, not a timer.
+      const { track, stopped } = await pollCaptionJob(
+        input.clipId,
+        (job) => setActionProgress({ label: job.message, percent: job.progress }),
+        () => stoppedActionRef.current,
+      );
+      if (stopped) return; // cancelled: leave the panel as the user left it
+      if (track) {
+        adopted = {
+          ...track,
+          id: existing?.id ?? track.id,
+          fontFamily: existing?.fontFamily ?? track.fontFamily,
+          fontSource: existing?.fontSource ?? track.fontSource,
+        };
+      }
     } catch {
-      const fallbackClip: Clip = {
-        id: input.clipId,
-        momentId: input.clipId,
-        videoId: video?.id ?? "take",
-        title: input.title,
-        caption: input.caption,
-        hashtags: [],
-        tags: [],
-        start: input.start,
-        end: input.end,
-        posted: false,
-      };
-      nextTrack = {
-        id: existing?.id ?? uid("captrack"),
-        clipId: input.clipId,
-        language: input.language,
-        fontFamily: existing?.fontFamily ?? "Inter",
-        fontSource: existing?.fontSource ?? "system",
-        segments: buildCaptionSegments(fallbackClip, input.language),
-      };
+      // Unreachable backend, or a job that reported an error. Fall back below.
+    } finally {
+      setActionProgress(null); // never leave a finished bar on screen
     }
+
+    const nextTrack: CaptionTrack =
+      adopted ??
+      (() => {
+        const fallbackClip: Clip = {
+          id: input.clipId,
+          momentId: input.clipId,
+          videoId: video?.id ?? "take",
+          title: input.title,
+          caption: input.caption,
+          hashtags: [],
+          tags: [],
+          start: input.start,
+          end: input.end,
+          posted: false,
+        };
+        return {
+          id: existing?.id ?? uid("captrack"),
+          clipId: input.clipId,
+          language: input.language,
+          fontFamily: existing?.fontFamily ?? "Inter",
+          fontSource: existing?.fontSource ?? "system",
+          // No audio was read, so these timings are spread across the cut
+          // rather than heard. The panel says which, so a guess is never
+          // presented as word-accurate.
+          source: "estimated" as const,
+          segments: buildCaptionSegments(fallbackClip, input.language),
+        };
+      })();
+
     setCaptionTracks((prev) => [
       nextTrack,
       ...prev.filter((track) => track.clipId !== input.clipId),
@@ -2327,6 +2472,16 @@ export default function Editor() {
       (segment) => time >= segment.start && time <= segment.end,
     ) ?? null;
 
+  // The imported file's real shape, for the Take panel's note. Read off the file
+  // at import time; a project reopened later reads the dimensions the server
+  // recorded alongside the upload, so the note survives a reload.
+  const takeShape =
+    importedShape ??
+    (video?.width && video?.height ? { width: video.width, height: video.height } : null);
+  const takeShapeLabel = takeShape
+    ? `${takeShape.width}×${takeShape.height} · ${nearestAspect(takeShape.width, takeShape.height) ?? aspect}`
+    : null;
+
   /** Publishes a cut and comes back with the verdict — the real YouTube / API path. */
   /**
    * Guarantee the clip exists on the backend with its current copy before we
@@ -2366,35 +2521,48 @@ export default function Editor() {
   }
 
   async function shipToYouTube(clip: Clip): Promise<boolean> {
+    const publishKey = clip.id;
+    if (clip.posted || publishingClipIds.current.has(publishKey) || publishedClipIds.current.has(publishKey)) {
+      return false;
+    }
+    publishingClipIds.current.add(publishKey);
     try {
-      setActionProgress({ label: `Preparing “${clip.title}”`, percent: 36 });
+      setActionProgress({ label: `Preparing "${clip.title}"`, percent: 36 });
       const ready = await ensureServerClip(clip);
+      if (publishedClipIds.current.has(ready.id)) return false;
       setActionProgress({
-        label: `Publishing “${clip.title}” to YouTube`,
+        label: `Publishing "${clip.title}" to YouTube`,
         percent: 74,
       });
       const { postId, postUrl } = await api.postClip(ready.id);
-      setActionProgress({ label: `Published “${clip.title}”`, percent: 100 });
+      publishingClipIds.current.add(ready.id);
+      publishedClipIds.current.add(clip.id);
+      publishedClipIds.current.add(ready.id);
+      setActionProgress({ label: `Published "${clip.title}"`, percent: 100 });
       setClips((prev) =>
         prev.map((c) =>
-          c.id === clip.id ? { ...ready, posted: true, postId, postUrl } : c,
+          c.id === clip.id || c.id === ready.id ? { ...ready, posted: true, postId, postUrl } : c,
         ),
       );
       if (selectedClipId === clip.id) setSelectedClipId(ready.id);
       setProjectStatus("posted");
       setProjectPostUrl(postUrl);
       setProjectPostId(postId);
-      const postedMessage = `Posted “${clip.title}” to YouTube. Watch it here: ${postUrl}`;
-      pushMind(postedMessage, false);
+      const postedMessage = `Posted "${clip.title}" to YouTube. Watch it here: ${postUrl}`;
+      const messageKey = `${postId}:${postUrl}`;
+      const shouldSaveMessage = !publishedMessageKeys.current.has(messageKey);
+      if (shouldSaveMessage) {
+        publishedMessageKeys.current.add(messageKey);
+        pushMind(postedMessage, false);
+      }
       // Create the project first if this session never saved one, then file the
       // link in its thread. Writing it anywhere else loses it: the loader
       // replaces the thread the moment a project id arrives, so a line filed
       // under the pre-project key is gone as soon as the id lands.
       const thread = projectId ?? (await ensureProject());
-      if (thread) {
+      if (thread && shouldSaveMessage) {
         await api.saveEditorEvent(thread, postedMessage).catch(() => null);
       }
-
       const postedClips = clips.map((c) =>
         c.id === clip.id ? { ...ready, posted: true, postId, postUrl } : c,
       );
@@ -2463,9 +2631,10 @@ export default function Editor() {
     } catch (err: any) {
       showStatus(errorText("Publish failed", err));
       return false;
+    } finally {
+      publishingClipIds.current.delete(clip.id);
     }
   }
-
   async function handleExport(target: ExportTarget) {
     const clip = exportClip;
     if (!clip || exporting) return;
@@ -3379,10 +3548,16 @@ export default function Editor() {
   const aspectMeta = ASPECTS.find((item) => item.id === aspect) ?? ASPECTS[0];
   const hasTake = Boolean(mediaUrl || video || takeSegments.length > 0);
 
+  /** The creator's own pick. Recorded so no later import overrides it. */
+  function chooseAspect(next: string) {
+    aspectChosen.current = true;
+    setAspect(next);
+  }
+
   function cycleAspect() {
     const index = ASPECTS.findIndex((item) => item.id === aspect);
     const next = ASPECTS[(index + 1) % ASPECTS.length] ?? ASPECTS[0];
-    setAspect(next.id);
+    chooseAspect(next.id);
   }
 
   return (
@@ -3486,7 +3661,7 @@ export default function Editor() {
           <select
             value={aspect}
             aria-label="Aspect ratio"
-            onChange={(event) => setAspect(event.target.value)}
+            onChange={(event) => chooseAspect(event.target.value)}
           >
             {ASPECTS.map((item) => (
               <option key={item.id} value={item.id}>
@@ -3535,6 +3710,7 @@ export default function Editor() {
         statusText={statusText}
         regeneratingMoments={regeneratingMoments}
         actionProgress={actionProgress}
+        takeShapeLabel={takeShapeLabel}
         selectedClipId={selectedClipId}
         captionTracks={captionTracks}
         fontChoices={fontChoices}
@@ -3683,7 +3859,28 @@ export default function Editor() {
                 className="cut__caption-preview"
                 style={{ fontFamily: previewCaptionTrack?.fontFamily ?? "Inter" }}
               >
-                {previewCaptionSegment.text}
+                {previewCaptionSegment.words?.length ? (
+                  previewCaptionSegment.words.map((word, index) => (
+                    // The word being said is picked out in the accent colour —
+                    // the highlight moves word by word, beat by beat. The space
+                    // after each word stays outside the span so the line still
+                    // breaks between words and the colour never sits on a gap.
+                    <Fragment key={`${word.start}-${index}`}>
+                      <span
+                        className={
+                          time >= word.start && time < word.end
+                            ? "cut__caption-word is-spoken"
+                            : "cut__caption-word"
+                        }
+                      >
+                        {word.text}
+                      </span>
+                      {index < previewCaptionSegment.words!.length - 1 ? " " : ""}
+                    </Fragment>
+                  ))
+                ) : (
+                  previewCaptionSegment.text
+                )}
               </span>
             ) : null}
           </div>

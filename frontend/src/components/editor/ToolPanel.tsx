@@ -86,6 +86,9 @@ type ToolPanelProps = {
   onDecideMoment: (id: string, decision: "accept" | "reject") => void;
   onToolChange?: (tool: ToolId) => void;
   onReanalyze?: () => void;
+  /** The imported file's real pixel size and the preset it maps to ("1080×1920
+   *  · 9:16"), so the frame's ratio is visible rather than a mystery. */
+  takeShapeLabel?: string | null;
 };
 
 const HEADINGS: Record<ToolId, string> = {
@@ -366,6 +369,9 @@ export default function ToolPanel(props: ToolPanelProps) {
                 <span className="cut__row-label">{video.name}</span>
               </div>
               <span className="cut__time">{formatTime(video.duration)}</span>
+              {props.takeShapeLabel ? (
+                <span className="cut__take-shape">{props.takeShapeLabel}</span>
+              ) : null}
               <div className="cut__row-actions">
                 <button
                   type="button"
@@ -697,6 +703,16 @@ export default function ToolPanel(props: ToolPanelProps) {
                     Refresh installed fonts
                   </button>
 
+                  {/* Which timings these are. A track cut from a real
+                      transcript is word-accurate; one built without reading the
+                      audio is spread across the cut. Saying which it is keeps a
+                      guess from being read as what the speaker actually said. */}
+                  <p className="cut__caption-source">
+                    {selectedCaptionTrack.source === "speech"
+                      ? "Timed from the take's speech — each cue turns over where the speaker pauses."
+                      : "Estimated timings — built from the copy, not from the audio."}
+                  </p>
+
                   <div className="cut__caption-lines">
                     {selectedCaptionTrack.segments.map((segment, index) => (
                       <label key={segment.id} className="cut__caption-line">
@@ -713,7 +729,11 @@ export default function ToolPanel(props: ToolPanelProps) {
                               ...selectedCaptionTrack,
                               segments: selectedCaptionTrack.segments.map((item, i) =>
                                 i === index
-                                  ? { ...item, text: event.target.value }
+                                  ? // Rewriting the words drops their timings:
+                                    // the times describe what was said before,
+                                    // not this text. The cue falls back to a
+                                    // plain line until it is generated again.
+                                    { ...item, text: event.target.value, words: [] }
                                   : item,
                               ),
                             })
