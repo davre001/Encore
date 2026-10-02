@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: encore-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt -r requirements-optional.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: HOST
+        value: 0.0.0.0
