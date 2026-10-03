@@ -9,6 +9,7 @@ Automatically handles 'postgres://' -> 'postgresql://' normalization.
 
 import os
 import logging
+import importlib.util
 from typing import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
@@ -23,6 +24,12 @@ if raw_url:
     # Heroku / Supabase style postgres:// fix
     if raw_url.startswith("postgres://"):
         raw_url = raw_url.replace("postgres://", "postgresql://", 1)
+    if (
+        raw_url.startswith("postgresql+psycopg://")
+        and importlib.util.find_spec("psycopg") is None
+        and importlib.util.find_spec("psycopg2") is not None
+    ):
+        raw_url = raw_url.replace("postgresql+psycopg://", "postgresql+psycopg2://", 1)
     db_url = raw_url
     connect_args = {}
 else:
