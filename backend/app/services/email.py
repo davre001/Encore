@@ -72,15 +72,10 @@ def send_password_reset_email(to_email: str, code: str) -> bool:
             msg.attach(MIMEText(html_body, "html"))
 
             envelope_from = parseaddr(EMAILS_FROM)[1] or SMTP_USER
-            if SMTP_PORT == 465:
-                with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-                    server.login(SMTP_USER, SMTP_PASSWORD)
-                    server.sendmail(envelope_from, [to_email], msg.as_string())
-            else:
-                with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-                    server.starttls()
-                    server.login(SMTP_USER, SMTP_PASSWORD)
-                    server.sendmail(envelope_from, [to_email], msg.as_string())
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(envelope_from, [to_email], msg.as_string())
             logger.info(f"Password reset email sent to {to_email} via SMTP")
             return True
         except Exception as e:
