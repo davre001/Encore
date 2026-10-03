@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from .config import CORS_ORIGINS, capabilities
 from . import storage
 from .db import init_db
-from .services.email import smtp_configured
+from .services.email import resend_configured, smtp_configured
 from .routes import (
     analytics,
     auth,
@@ -85,7 +85,7 @@ async def root() -> RedirectResponse:
 async def health() -> dict:
     """What's real vs. simulated right now - reflects installed tools/keys."""
     caps = capabilities()
-    caps["email"] = {"smtp": smtp_configured()}
+    caps["email"] = {"resend": resend_configured(), "smtp": smtp_configured()}
     return {"status": "ok", "capabilities": caps}
 
 

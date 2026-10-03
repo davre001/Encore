@@ -4,12 +4,15 @@ import logging
 import os
 import secrets
 import smtplib
+import httpx
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import parseaddr
 
 logger = logging.getLogger("encore.email")
 
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+RESEND_BASE_URL = os.getenv("RESEND_BASE_URL", "https://api.resend.com").rstrip("/")
 SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
@@ -17,6 +20,11 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").replace(" ", "").strip()
 EMAILS_FROM = os.getenv("EMAILS_FROM", "noreply@encore.app")
 EMAIL_DEBUG_LOG_CODES = os.getenv("EMAIL_DEBUG_LOG_CODES", "").strip().lower() in {"1", "true", "yes"}
 
+
+
+def resend_configured() -> bool:
+    """True when Resend API email delivery is configured."""
+    return bool(RESEND_API_KEY and EMAILS_FROM)
 
 
 def smtp_configured() -> bool:
@@ -60,6 +68,32 @@ def send_password_reset_email(to_email: str, code: str) -> bool:
     </html>
     """
 
+    if resend_configured():
+        try:
+            with httpx.Client(timeout=15) as client:
+                resp = client.post(
+                    f"{RESEND_BASE_URL}/emails",
+                    headers={
+                        "Authorization": f"Bearer {RESEND_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "from": EMAILS_FROM,
+                        "to": [to_email],
+                        "subject": subject,
+                        "text": text_body,
+                        "html": html_body,
+                    },
+                )
+            if 200 <= resp.status_code < 300:
+                logger.info(f"Password reset email sent to {to_email} via Resend")
+                return True
+            logger.error(
+                "Failed to send password reset email via Resend: "
+                f"HTTP {resp.status_code}: {resp.text}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send password reset email via Resend: {type(e).__name__}: {e}")
     # Real SMTP send if credentials exist
     if SMTP_HOST and SMTP_USER and SMTP_PASSWORD:
         try:
