@@ -6,6 +6,7 @@ import secrets
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import parseaddr
 
 logger = logging.getLogger("encore.email")
 
@@ -73,11 +74,12 @@ def send_password_reset_email(to_email: str, code: str) -> bool:
             with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
                 server.starttls()
                 server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(EMAILS_FROM, [to_email], msg.as_string())
+                envelope_from = parseaddr(EMAILS_FROM)[1] or SMTP_USER
+                server.sendmail(envelope_from, [to_email], msg.as_string())
             logger.info(f"Password reset email sent to {to_email} via SMTP")
             return True
         except Exception as e:
-            logger.error(f"Failed to send email via SMTP ({e}). Falling back to console notification.")
+            logger.error(f"Failed to send password reset email via SMTP: {type(e).__name__}: {e}")
 
     if EMAIL_DEBUG_LOG_CODES:
         banner = f"""

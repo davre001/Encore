@@ -188,8 +188,8 @@ def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_db)) 
     # Dispatch email through configured SMTP.
     if not send_password_reset_email(email, code):
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Password reset email is not configured yet. Please contact support.",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Password reset email could not be sent. Check the email provider settings.",
         )
 
     return MessageResponse(
