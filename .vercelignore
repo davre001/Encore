@@ -1,6 +1,0 @@
-*
-!frontend/
-!frontend/**
-frontend/.env*
-frontend/.next/
-frontend/node_modules/
