@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from .config import CORS_ORIGINS, capabilities
 from . import storage
 from .db import init_db
+from .services.email import smtp_configured
 from .routes import (
     analytics,
     auth,
@@ -82,8 +83,10 @@ async def root() -> RedirectResponse:
 
 @app.get("/api/health", tags=["meta"])
 async def health() -> dict:
-    """What's real vs. simulated right now — reflects installed tools/keys."""
-    return {"status": "ok", "capabilities": capabilities()}
+    """What's real vs. simulated right now - reflects installed tools/keys."""
+    caps = capabilities()
+    caps["email"] = {"smtp": smtp_configured()}
+    return {"status": "ok", "capabilities": caps}
 
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

@@ -17,6 +17,11 @@ EMAILS_FROM = os.getenv("EMAILS_FROM", "noreply@encore.app")
 EMAIL_DEBUG_LOG_CODES = os.getenv("EMAIL_DEBUG_LOG_CODES", "").strip().lower() in {"1", "true", "yes"}
 
 
+
+def smtp_configured() -> bool:
+    """True when the backend has enough SMTP config to attempt real email delivery."""
+    return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
+
 def generate_six_digit_code() -> str:
     """Generate a cryptographically secure 6-digit verification code."""
     return f"{secrets.randbelow(900000) + 100000}"
