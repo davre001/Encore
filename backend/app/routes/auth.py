@@ -185,8 +185,12 @@ def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_db)) 
     db.add(reset_record)
     db.commit()
 
-    # Dispatch email (via SMTP or console in dev)
-    send_password_reset_email(email, code)
+    # Dispatch email through configured SMTP.
+    if not send_password_reset_email(email, code):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Password reset email is not configured yet. Please contact support.",
+        )
 
     return MessageResponse(
         message=f"A 6-digit verification code has been sent to {email}. It will expire in 15 minutes."

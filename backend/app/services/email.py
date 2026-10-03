@@ -14,6 +14,7 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").replace(" ", "").strip()
 EMAILS_FROM = os.getenv("EMAILS_FROM", "noreply@encore.app")
+EMAIL_DEBUG_LOG_CODES = os.getenv("EMAIL_DEBUG_LOG_CODES", "").strip().lower() in {"1", "true", "yes"}
 
 
 def generate_six_digit_code() -> str:
@@ -73,8 +74,8 @@ def send_password_reset_email(to_email: str, code: str) -> bool:
         except Exception as e:
             logger.error(f"Failed to send email via SMTP ({e}). Falling back to console notification.")
 
-    # Development & test fallback: log clearly so testing works out of the box
-    banner = f"""
+    if EMAIL_DEBUG_LOG_CODES:
+        banner = f"""
 ======================================================================
 [ENCORE EMAIL DISPATCH]
 To: {to_email}
@@ -82,6 +83,9 @@ Subject: {subject}
 Verification Code: >>> {code} <<< (Valid for 15 minutes)
 ======================================================================
 """
-    print(banner, flush=True)
-    logger.info(f"Verification code for {to_email}: {code}")
-    return True
+        print(banner, flush=True)
+        logger.info(f"Verification code for {to_email}: {code}")
+        return True
+
+    logger.error("Password reset email not sent: SMTP is not configured.")
+    return False
