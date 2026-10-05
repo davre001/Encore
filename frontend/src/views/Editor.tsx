@@ -988,9 +988,28 @@ export default function Editor() {
     };
   }, [mediaUrl, mediaDuration]);
 
-  function errorText(prefix: string, err: unknown) {
+  function analysisFailure(prefix: string, err: unknown): {
+    message: string;
+    errorType: NonNullable<AnalysisStatus["errorType"]>;
+  } {
     const raw = err instanceof Error ? err.message : String(err || "Unknown error");
     const lower = raw.toLowerCase();
+    if (
+      lower.includes("video file not found") ||
+      lower.includes("video not found") ||
+      lower.includes("source video")
+    ) {
+      return {
+        message: "The source video is no longer available. Upload it again.",
+        errorType: "unknown",
+      };
+    }
+    if (lower.includes("401") || lower.includes("authentication required") || lower.includes("expired session")) {
+      return {
+        message: "Your session has expired. Sign in again.",
+        errorType: "unknown",
+      };
+    }
     if (
       lower.includes("failed to fetch") ||
       lower.includes("networkerror") ||
@@ -999,18 +1018,30 @@ export default function Editor() {
       lower.includes("getaddrinfo") ||
       lower.includes("connection")
     ) {
-      return `${prefix}: Connection error, check your network.`;
+      return {
+        message: `${prefix}: Connection error, check your network.`,
+        errorType: "network",
+      };
     }
     if (lower.includes("econnrefused") || lower.includes("unable to connect")) {
-      return `${prefix}: App server error`;
+      return { message: `${prefix}: App server error`, errorType: "api" };
+    }
+    if (lower.includes("timeout") || lower.includes("timed out")) {
+      return { message: `${prefix}: Timeout error`, errorType: "timeout" };
+    }
+    if (lower.includes("429") || lower.includes("rate limit") || lower.includes("quota")) {
+      return { message: `${prefix}: Rate limit error`, errorType: "quota" };
     }
     if (lower.includes("api error") || lower.includes("500") || lower.includes("503")) {
-      return `${prefix}: API error`;
+      return { message: `${prefix}: API error`, errorType: "api" };
     }
     if (lower.includes("video ai") && lower.includes("could not finish")) {
-      return `${prefix}: API error`;
+      return { message: `${prefix}: API error`, errorType: "api" };
     }
-    return `${prefix}: ${raw}`;
+    return { message: `${prefix}: ${raw}`, errorType: "unknown" };
+  }
+  function errorText(prefix: string, err: unknown) {
+    return analysisFailure(prefix, err).message;
   }
   function showStatus(text: string) {
     setStatusText(text);
@@ -1227,11 +1258,11 @@ export default function Editor() {
       }
     } catch (err: any) {
       setBusy(false);
+      const failure = analysisFailure("Upload failed", err);
       setAnalysisStatus({
         videoId: video?.id ?? "unknown",
         stage: "error",
-        message: `Upload failed: ${err.message || err}`,
-        errorType: "network",
+        ...failure,
         updatedAt: Date.now(),
         done: true,
       });
@@ -1847,11 +1878,11 @@ export default function Editor() {
       setActionProgress({ label: "Re-analysis complete", percent: 100 });
       await sleep(1200);
     } catch (err: any) {
+      const failure = analysisFailure("Re-analysis failed", err);
       setAnalysisStatus({
         videoId: video.id,
         stage: "error",
-        message: `Re-analysis failed: ${err.message || err}`,
-        errorType: "network",
+        ...failure,
         updatedAt: Date.now(),
         done: true,
       });
@@ -2805,16 +2836,15 @@ export default function Editor() {
         }
       }
     } catch (err: any) {
-      const message = `Regeneration failed: ${err.message || err}`;
+      const failure = analysisFailure("Regeneration failed", err);
       setAnalysisStatus({
         videoId: video.id,
         stage: "error",
-        message,
-        errorType: "network",
+        ...failure,
         updatedAt: Date.now(),
         done: true,
       });
-      showStatus(message);
+      showStatus(failure.message);
     } finally {
       setBusy(false);
       setRegeneratingMoments(false);

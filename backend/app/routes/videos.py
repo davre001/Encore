@@ -255,7 +255,10 @@ async def retry_analysis(
         raise HTTPException(status_code=404, detail="video not found")
     src_path = record.get("srcPath")
     if not src_path or not os.path.isfile(src_path):
-        raise HTTPException(status_code=404, detail="video file not found")
+        raise HTTPException(
+            status_code=404,
+            detail="The source video is no longer available. Upload it again.",
+        )
 
     if video_id not in _ACTIVE_ANALYSES:
         storage.save_moments(video_id, [])
