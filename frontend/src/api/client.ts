@@ -20,7 +20,7 @@ import type {
 } from "../types";
 
 const API = "/api";
-/** Direct backend origin for large uploads — Next's proxy buffers only 10MB. */
+/** Direct backend origin for long-running publish and analytics requests. */
 const BACKEND =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:5000";
 
@@ -85,7 +85,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 export async function uploadVideo(file: File): Promise<Video> {
   const filename = file.name || "take.mp4";
   const qs = new URLSearchParams({ filename });
-  const start = await fetch(`${BACKEND}/api/videos/chunked/start?${qs.toString()}`, {
+  const start = await fetch(`${API}/videos/chunked/start?${qs.toString()}`, {
     method: "POST",
     headers: userHeaders(),
   });
@@ -96,7 +96,7 @@ export async function uploadVideo(file: File): Promise<Video> {
   for (let offset = 0; offset < file.size; offset += chunkSize) {
     const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
     const res = await fetch(
-      `${BACKEND}/api/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
+      `${API}/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
       {
         method: "POST",
         headers: {
@@ -116,7 +116,7 @@ export async function uploadVideo(file: File): Promise<Video> {
   }
 
   const finish = await fetch(
-    `${BACKEND}/api/videos/chunked/${encodeURIComponent(uploadId)}/finish?${qs.toString()}`,
+    `${API}/videos/chunked/${encodeURIComponent(uploadId)}/finish?${qs.toString()}`,
     {
       method: "POST",
       headers: userHeaders(),
