@@ -21,10 +21,19 @@ EMAILS_FROM = os.getenv("EMAILS_FROM", "noreply@encore.app")
 EMAIL_DEBUG_LOG_CODES = os.getenv("EMAIL_DEBUG_LOG_CODES", "").strip().lower() in {"1", "true", "yes"}
 
 
+def _resend_api_key() -> str:
+    """Use the dedicated API key, or an existing Resend SMTP credential."""
+    if RESEND_API_KEY:
+        return RESEND_API_KEY
+    if SMTP_HOST.strip().lower() == "smtp.resend.com":
+        return SMTP_PASSWORD
+    return ""
+
+
 
 def resend_configured() -> bool:
     """True when Resend API email delivery is configured."""
-    return bool(RESEND_API_KEY and EMAILS_FROM)
+    return bool(_resend_api_key() and EMAILS_FROM)
 
 
 def smtp_configured() -> bool:
@@ -69,12 +78,13 @@ def send_password_reset_email(to_email: str, code: str) -> bool:
     """
 
     if resend_configured():
+        resend_api_key = _resend_api_key()
         try:
             with httpx.Client(timeout=15) as client:
                 resp = client.post(
                     f"{RESEND_BASE_URL}/emails",
                     headers={
-                        "Authorization": f"Bearer {RESEND_API_KEY}",
+                        "Authorization": f"Bearer {resend_api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
