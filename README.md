@@ -171,6 +171,7 @@ Copy `backend/.env.example` to `backend/.env` (gitignored) and fill in only what
 | `WHISPER_MODEL` | faster-whisper model size | `base` |
 | `UPLOAD_DIR` / `DATA_DIR` | Storage locations | `../uploads`, `../data` |
 | `HOST` / `PORT` | Bind address for `python -m app` | `127.0.0.1` / `5000` |
+| `FRONTEND_ORIGIN` | Exact deployed frontend origin used for redirects and CORS | `http://localhost:3000` |
 | `CORS_ORIGINS` | Allowed front-end origins (comma-separated) | `http://localhost:3000,http://localhost:3001` |
 
 No secrets are committed — only `.env.example`.

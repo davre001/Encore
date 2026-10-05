@@ -79,13 +79,17 @@ HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "5000"))
 
 # --- CORS ------------------------------------------------------------------
-CORS_ORIGINS = [
+_cors_origins = [
     origin.strip()
     for origin in os.getenv(
         "CORS_ORIGINS", "http://localhost:3000,http://localhost:3001"
     ).split(",")
     if origin.strip()
 ]
+# FRONTEND_ORIGIN already identifies the one deployed UI used by OAuth
+# redirects. Include that exact origin in CORS too so production browser
+# requests cannot drift from the redirect configuration.
+CORS_ORIGINS = list(dict.fromkeys([*_cors_origins, FRONTEND_ORIGIN]))
 
 
 def _has_module(name: str) -> bool:
