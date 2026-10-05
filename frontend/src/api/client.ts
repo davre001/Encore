@@ -375,18 +375,17 @@ export async function listMessages(threadId: string): Promise<Message[]> {
 }
 export const getMessages = listMessages;
 
-/** Send a chat message to the Mind.
+/** Send a chat message through the same-origin API rewrite.
  *
- * Goes straight to the API, not through the Next dev proxy. That proxy gives
- * up at 30s and answers "Internal Server Error" while the Mind is still
- * writing — which is what turned a slow reply into
- * "Failed to reach Encore Mind: API Error 500".
+ * This keeps production chat requests out of the browser's CORS path. Both the
+ * Next development proxy and Vercel rewrite forward /api to the backend, and
+ * the development proxy timeout is raised in next.config.ts for slow replies.
  */
 export async function sendMessage(
   threadId: string,
   text: string
 ): Promise<Message> {
-  const res = await fetch(`${BACKEND}/api/messages`, {
+  const res = await fetch(`${API}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...userHeaders() },
     body: JSON.stringify({ threadId, text }),
