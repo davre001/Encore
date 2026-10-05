@@ -244,9 +244,11 @@ def _wait_file_active(file_record: dict, timeout_s: float = 120.0) -> Optional[d
             response.raise_for_status()
             current = _gemini_file_record(response.json())
         except Exception as exc:
+            _set_error(exc)
             log.warning("Gemini video processing status unavailable: %s", exc)
             return None
         time.sleep(3)
+    _set_error(TimeoutError("Gemini video processing timed out"))
     log.warning("Gemini video processing timed out for %s", name)
     return None
 
@@ -736,23 +738,18 @@ def propose_video_moments(
         "required": ["moments"],
     }
     data = _interaction_json_from_video(file_record=active_file, prompt=prompt)
-    # A timeout/503 from the interactions endpoint usually means the provider is
-    # unavailable for this video right now. Returning quickly lets the caller use
-    # transcript-grounded fallback moments instead of waiting through another
-    # slow video request that is likely to fail the same way.
-    current_error = last_error()
-    if (
-        not isinstance(data, dict)
-        and current_error
-        and current_error.get("errorType") in {"timeout", "api", "network", "quota"}
-    ):
-        return None
+    # The interactions API is not available for every Gemini model/account and
+    # can fail independently of generateContent. Try the stable file-based video
+    # path before giving up, especially on Render where local Whisper may not be
+    # installed and there would otherwise be no transcript fallback.
     if not isinstance(data, dict):
         data = _generate_json_from_video_file(
             file_record=active_file,
             prompt=prompt,
             schema=schema,
         )
+    if isinstance(data, dict):
+        clear_last_error()
     rows = data.get("moments") if isinstance(data, dict) else None
     return _normalize_moment_rows(rows, span)
 
