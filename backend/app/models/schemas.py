@@ -8,7 +8,7 @@ round-trip cleanly with the TypeScript types and a future wired client.
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 Decision = Literal["accept", "reject"]
@@ -83,6 +83,7 @@ class AnalysisStatus(CamelModel):
     video_id: str
     stage: AnalysisStage
     message: str
+    progress: Optional[int] = Field(default=None, ge=0, le=100)
     updated_at: int
     error_type: Optional[AnalysisErrorType] = None
     done: bool = False

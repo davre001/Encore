@@ -111,8 +111,13 @@ def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
             {"start": row["start"], "end": row["end"], "text": row["text"]}
             for row in rows
         ]
-        _status(video_id, "watching", "Watching the video for standout moments.")
-        moments = analyze.find_moments(video_id, duration, transcript, src_path)
+        def report_progress(message: str, progress: int) -> None:
+            _status(video_id, "watching", message, progress=progress)
+
+        report_progress("Preparing the video for review.", 48)
+        moments = analyze.find_moments(
+            video_id, duration, transcript, src_path, on_progress=report_progress,
+        )
         _status(video_id, "generating", "Turning the strongest beats into proposed cuts.")
         storage.save_moments(video_id, moments)
         if moments:

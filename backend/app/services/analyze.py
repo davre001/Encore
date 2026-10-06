@@ -5,6 +5,8 @@ module only returns moments grounded in transcribed speech or an AI proposal
 made from that transcript. If there is no meaningful speech, it returns [].
 """
 
+from typing import Callable, Optional
+
 from ..config import FALLBACK_DURATION
 from .. import storage
 from . import gemini, minds
@@ -98,12 +100,13 @@ def find_moments(
     duration: float,
     transcript: list[dict],
     src_path: str | None = None,
+    on_progress: Optional[Callable[[str, int], None]] = None,
 ) -> list[dict]:
     span = _span(duration)
     proposed = None
 
     if src_path and gemini.available():
-        proposed = gemini.propose_video_moments(src_path, transcript, span)
+        proposed = gemini.propose_video_moments(src_path, transcript, span, on_progress)
     if proposed:
         return _ranked(
             [

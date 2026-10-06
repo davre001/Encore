@@ -12,14 +12,14 @@ import os
 import re
 import time
 from contextvars import ContextVar
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 
 from ..config import GEMINI_API_KEY, GEMINI_MODEL_TEXT, GEMINI_MODEL_VIDEO
 from . import ffmpeg
 
-log = logging.getLogger("encore.gemini")
+log = logging.getLogger("uvicorn.error.encore.gemini")
 _LAST_ERROR: ContextVar[Optional[dict]] = ContextVar("gemini_last_error", default=None)
 
 LANGUAGE_LABELS = {
@@ -268,6 +268,8 @@ def _generate_json_from_video_file(
     prompt: str,
     schema: dict,
     timeout_s: float = 60.0,
+    processing_mode: str = "AGENTIC",
+    on_progress: Optional[Callable[[str, int], None]] = None,
 ) -> Optional[dict]:
     uri = file_record.get("uri")
     mime_type = file_record.get("mime_type") or file_record.get("mimeType") or "video/mp4"
@@ -275,7 +277,7 @@ def _generate_json_from_video_file(
         return None
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        f"models/{GEMINI_MODEL_VIDEO}:generateContent"
+        f"models/{GEMINI_MODEL_VIDEO}:streamGenerateContent?alt=sse"
     )
     body = {
         "contents": [
@@ -286,7 +288,7 @@ def _generate_json_from_video_file(
                             "file_uri": uri,
                             "mime_type": mime_type,
                         },
-                        "media_processing": "AGENTIC",
+                        "media_processing": processing_mode,
                     },
                     {"text": prompt},
                 ]
@@ -298,21 +300,46 @@ def _generate_json_from_video_file(
         },
     }
     last_error: Exception | None = None
+    deadline = time.monotonic() + 180.0
     for attempt in range(3):
         try:
-            response = httpx.post(
-                url,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": GEMINI_API_KEY,
-                },
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Video review exceeded its time limit")
+            text_chunks: list[str] = []
+            with httpx.stream(
+                "POST", url,
+                headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
                 json=body,
-                timeout=timeout_s,
-            )
-            response.raise_for_status()
-            data = _json_from_text(_extract_text(response.json()))
-            if isinstance(data, dict):
-                clear_last_error()
+                timeout=httpx.Timeout(min(timeout_s, remaining), connect=min(20.0, remaining)),
+            ) as response:
+                if not response.is_success:
+                    response.read()
+                response.raise_for_status()
+                last_update = 0.0
+                for line in response.iter_lines():
+                    now = time.monotonic()
+                    if now >= deadline:
+                        raise TimeoutError("Video review exceeded its time limit")
+                    if not line.startswith("data:"):
+                        continue
+                    event_data = line[5:].strip()
+                    if event_data == "[DONE]":
+                        break
+                    payload = json.loads(event_data)
+                    if payload.get("error"):
+                        raise RuntimeError("AI stream returned an error")
+                    for candidate in payload.get("candidates", []):
+                        for part in candidate.get("content", {}).get("parts", []):
+                            if isinstance(part.get("text"), str) and not part.get("thought"):
+                                text_chunks.append(part["text"])
+                    if on_progress and now - last_update >= 5:
+                        on_progress("Watching the video for standout moments.", 68)
+                        last_update = now
+            data = _json_from_text("".join(text_chunks))
+            if not isinstance(data, dict):
+                raise ValueError("Video review returned no usable moments response")
+            clear_last_error()
             return data
         except Exception as exc:
             _set_error(exc, "video generation")
@@ -329,6 +356,8 @@ def _generate_json_from_video_file(
             if not retryable:
                 break
             if attempt < 2:
+                if on_progress:
+                    on_progress("Retrying the video review.", 68)
                 _sleep_before_retry(attempt)
     log.warning("Gemini generateContent video unavailable after retries: %s", last_error)
     return None
@@ -646,13 +675,26 @@ def propose_video_moments(
     src_path: str,
     transcript: Optional[list[dict]],
     span: float,
+    on_progress: Optional[Callable[[str, int], None]] = None,
 ) -> Optional[list[dict]]:
     clear_last_error()
+    started = time.monotonic()
+    if on_progress:
+        on_progress("Preparing the video for review.", 48)
     review_path = ffmpeg.analysis_proxy(src_path)
+    log.info("Video review preparation took %.1fs", time.monotonic() - started)
+    started = time.monotonic()
+    if on_progress:
+        on_progress("Sending the video for analysis.", 54)
     uploaded = _upload_video_file(review_path)
+    log.info("Video review upload took %.1fs", time.monotonic() - started)
     if not uploaded:
         return None
+    started = time.monotonic()
+    if on_progress:
+        on_progress("Processing the video for review.", 60)
     active_file = _wait_file_active(uploaded)
+    log.info("Video review processing took %.1fs", time.monotonic() - started)
     if not active_file:
         return None
 
@@ -708,11 +750,17 @@ def propose_video_moments(
         },
         "required": ["moments"],
     }
+    if on_progress:
+        on_progress("Watching the video for standout moments.", 68)
+    started = time.monotonic()
     data = _generate_json_from_video_file(
         file_record=active_file,
         prompt=prompt,
         schema=schema,
+        processing_mode="STATIC" if span < 300 else "AGENTIC",
+        on_progress=on_progress,
     )
+    log.info("Video moment review took %.1fs", time.monotonic() - started)
     if isinstance(data, dict):
         clear_last_error()
     rows = data.get("moments") if isinstance(data, dict) else None
