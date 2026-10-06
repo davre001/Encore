@@ -128,6 +128,7 @@ function isStatusLine(text: string) {
 }
 function displayAnalysisMessage(status: AnalysisStatus | null, hasVideo: boolean) {
   if (!status) return null;
+  if (status.message === "AI connection error") return status.message;
   if (status.message.includes("video AI") && status.message.includes("could not finish")) {
     if (status.errorType === "network") {
       return "Connection error, check your network.";
@@ -849,4 +850,3 @@ export default function ToolPanel(props: ToolPanelProps) {
     </section>
   );
 }
-

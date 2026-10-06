@@ -11,6 +11,7 @@ import mimetypes
 import os
 import re
 import time
+from contextvars import ContextVar
 from typing import Optional
 
 import httpx
@@ -19,7 +20,7 @@ from ..config import GEMINI_API_KEY, GEMINI_MODEL_TEXT, GEMINI_MODEL_VIDEO
 from . import ffmpeg
 
 log = logging.getLogger("encore.gemini")
-_LAST_ERROR: Optional[dict] = None
+_LAST_ERROR: ContextVar[Optional[dict]] = ContextVar("gemini_last_error", default=None)
 
 LANGUAGE_LABELS = {
     "en": "English",
@@ -46,31 +47,45 @@ def available() -> bool:
 
 
 def clear_last_error() -> None:
-    global _LAST_ERROR
-    _LAST_ERROR = None
+    _LAST_ERROR.set(None)
 
 
 def last_error() -> Optional[dict]:
-    return dict(_LAST_ERROR) if _LAST_ERROR else None
+    error = _LAST_ERROR.get()
+    return dict(error) if error else None
 
 
 def _classify_error(exc: Exception) -> dict:
     text = str(exc)
     lowered = text.lower()
+    status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+    if status_code is not None:
+        return (
+            {"errorType": "quota", "message": "Rate limit error"}
+            if status_code == 429
+            else {"errorType": "api", "message": "API error"}
+        )
     if "429" in text or "too many requests" in lowered:
         return {
             "errorType": "quota",
             "message": "Rate limit error",
         }
-    if "timeout" in lowered or "timed out" in lowered:
+    if (
+        isinstance(exc, (httpx.TimeoutException, TimeoutError))
+        or "timeout" in lowered
+        or "timed out" in lowered
+    ):
         return {
             "errorType": "timeout",
             "message": "Timeout error",
         }
-    if "connect" in lowered or "network" in lowered or "disconnected" in lowered or "getaddrinfo" in lowered or "name or service not known" in lowered or "dns" in lowered:
+    if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError)) or any(
+        word in lowered
+        for word in ("connect", "network", "disconnected", "getaddrinfo", "name or service not known", "dns")
+    ):
         return {
             "errorType": "network",
-            "message": "Connection error, check your network.",
+            "message": "AI connection error",
         }
     if "500" in text or "503" in text or "server error" in lowered:
         return {
@@ -83,9 +98,25 @@ def _classify_error(exc: Exception) -> dict:
     }
 
 
-def _set_error(exc: Exception) -> None:
-    global _LAST_ERROR
-    _LAST_ERROR = _classify_error(exc)
+def _set_error(exc: Exception, operation: str = "request") -> None:
+    _LAST_ERROR.set(_classify_error(exc))
+    # The exception class matters: several httpx timeouts have no message.
+    # Never log the resumable upload URL, which may contain credentials.
+    status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+    detail = str(exc)
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            payload = exc.response.json()
+            detail = str(payload.get("error", {}).get("message", ""))
+        except (ValueError, AttributeError):
+            detail = ""
+    detail = re.sub(r"https?://\S+", "[URL]", detail)
+    if GEMINI_API_KEY:
+        detail = detail.replace(GEMINI_API_KEY, "[REDACTED]")
+    log.warning(
+        "Gemini %s failed: %s status=%s detail=%s",
+        operation, type(exc).__name__, status, detail[:500],
+    )
 
 
 def _extract_text(payload: dict) -> str:
@@ -126,28 +157,6 @@ def _json_from_text(text: str):
         except ValueError:
             return None
     return None
-
-
-def _extract_interaction_text(payload: dict) -> str:
-    direct = payload.get("output_text") or payload.get("outputText")
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip()
-
-    out: list[str] = []
-    for step in payload.get("steps", []):
-        if not isinstance(step, dict):
-            continue
-        content = step.get("content")
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    out.append(part["text"])
-        summary = step.get("summary")
-        if isinstance(summary, list):
-            for part in summary:
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    out.append(part["text"])
-    return "\n".join(out).strip()
 
 
 def _mime_type(path: str) -> str:
@@ -208,7 +217,7 @@ def _upload_video_file(path: str, timeout_s: float = 180.0) -> Optional[dict]:
             record.setdefault("mimeType", mime_type)
             return record
         except Exception as exc:
-            _set_error(exc)
+            _set_error(exc, "video upload")
             last_error = exc
             log.warning(
                 "Gemini video upload attempt %s failed: %s",
@@ -244,62 +253,12 @@ def _wait_file_active(file_record: dict, timeout_s: float = 120.0) -> Optional[d
             response.raise_for_status()
             current = _gemini_file_record(response.json())
         except Exception as exc:
-            _set_error(exc)
+            _set_error(exc, "video processing")
             log.warning("Gemini video processing status unavailable: %s", exc)
             return None
         time.sleep(3)
     _set_error(TimeoutError("Gemini video processing timed out"))
     log.warning("Gemini video processing timed out for %s", name)
-    return None
-
-
-def _interaction_json_from_video(
-    *,
-    file_record: dict,
-    prompt: str,
-    timeout_s: float = 45.0,
-) -> Optional[dict]:
-    uri = file_record.get("uri")
-    mime_type = file_record.get("mime_type") or file_record.get("mimeType") or "video/mp4"
-    if not uri:
-        return None
-    body = {
-        "model": GEMINI_MODEL_VIDEO,
-        "input": [
-            {
-                "type": "video",
-                "uri": uri,
-                "mime_type": mime_type,
-                "processing": "agentic",
-            },
-            {"type": "text", "text": prompt},
-        ],
-    }
-    last_error: Exception | None = None
-    for attempt in range(2):
-        try:
-            response = httpx.post(
-                "https://generativelanguage.googleapis.com/v1beta/interactions",
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": GEMINI_API_KEY,
-                },
-                json=body,
-                timeout=timeout_s,
-            )
-            response.raise_for_status()
-            return _json_from_text(_extract_interaction_text(response.json()))
-        except Exception as exc:
-            _set_error(exc)
-            last_error = exc
-            log.warning(
-                "Gemini video moment detection attempt %s failed: %s",
-                attempt + 1,
-                exc,
-            )
-            if attempt < 1:
-                _sleep_before_retry(attempt)
-    log.warning("Gemini video moment detection unavailable after retries: %s", last_error)
     return None
 
 
@@ -339,7 +298,7 @@ def _generate_json_from_video_file(
         },
     }
     last_error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             response = httpx.post(
                 url,
@@ -351,22 +310,32 @@ def _generate_json_from_video_file(
                 timeout=timeout_s,
             )
             response.raise_for_status()
-            return _json_from_text(_extract_text(response.json()))
+            data = _json_from_text(_extract_text(response.json()))
+            if isinstance(data, dict):
+                clear_last_error()
+            return data
         except Exception as exc:
-            _set_error(exc)
+            _set_error(exc, "video generation")
             last_error = exc
             log.warning(
                 "Gemini generateContent video attempt %s failed: %s",
                 attempt + 1,
                 exc,
             )
-            if attempt < 1:
+            retryable = isinstance(exc, httpx.TransportError) or (
+                isinstance(exc, httpx.HTTPStatusError)
+                and exc.response.status_code in {408, 500, 502, 503, 504}
+            )
+            if not retryable:
+                break
+            if attempt < 2:
                 _sleep_before_retry(attempt)
     log.warning("Gemini generateContent video unavailable after retries: %s", last_error)
     return None
 
 
 def _generate_json(prompt: str, schema: dict, timeout_s: float = 45.0):
+    clear_last_error()
     if not available():
         return None
     url = (
@@ -392,6 +361,7 @@ def _generate_json(prompt: str, schema: dict, timeout_s: float = 45.0):
         )
         response.raise_for_status()
     except Exception as exc:
+        _set_error(exc, "structured generation")
         log.warning("Gemini caption generation unavailable: %s", exc)
         return None
     return _json_from_text(_extract_text(response.json()))
@@ -428,6 +398,7 @@ def translate_cues(texts: list[str], label: str) -> Optional[list[str]]:
 
 
 def generate_text(prompt: str, timeout_s: float = 45.0) -> Optional[str]:
+    clear_last_error()
     if not available():
         return None
     url = (
@@ -453,7 +424,7 @@ def generate_text(prompt: str, timeout_s: float = 45.0) -> Optional[str]:
         )
         response.raise_for_status()
     except Exception as exc:
-        _set_error(exc)
+        _set_error(exc, "text generation")
         log.warning("Gemini text generation unavailable: %s", exc)
         return None
     text = _extract_text(response.json()).strip()
@@ -737,17 +708,11 @@ def propose_video_moments(
         },
         "required": ["moments"],
     }
-    data = _interaction_json_from_video(file_record=active_file, prompt=prompt)
-    # The interactions API is not available for every Gemini model/account and
-    # can fail independently of generateContent. Try the stable file-based video
-    # path before giving up, especially on Render where local Whisper may not be
-    # installed and there would otherwise be no transcript fallback.
-    if not isinstance(data, dict):
-        data = _generate_json_from_video_file(
-            file_record=active_file,
-            prompt=prompt,
-            schema=schema,
-        )
+    data = _generate_json_from_video_file(
+        file_record=active_file,
+        prompt=prompt,
+        schema=schema,
+    )
     if isinstance(data, dict):
         clear_last_error()
     rows = data.get("moments") if isinstance(data, dict) else None

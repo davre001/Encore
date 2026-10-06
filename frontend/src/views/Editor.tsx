@@ -1003,6 +1003,12 @@ export default function Editor() {
         errorType: "unknown",
       };
     }
+    if (lower.includes("timeout") || lower.includes("timed out")) {
+      return { message: `${prefix}: Timeout error`, errorType: "timeout" };
+    }
+    if (lower.includes("econnrefused") || lower.includes("unable to connect")) {
+      return { message: `${prefix}: App server error`, errorType: "api" };
+    }
     if (
       lower.includes("failed to fetch") ||
       lower.includes("networkerror") ||
@@ -1015,12 +1021,6 @@ export default function Editor() {
         message: `${prefix}: Connection error, check your network.`,
         errorType: "network",
       };
-    }
-    if (lower.includes("econnrefused") || lower.includes("unable to connect")) {
-      return { message: `${prefix}: App server error`, errorType: "api" };
-    }
-    if (lower.includes("timeout") || lower.includes("timed out")) {
-      return { message: `${prefix}: Timeout error`, errorType: "timeout" };
     }
     if (lower.includes("429") || lower.includes("rate limit") || lower.includes("quota")) {
       return { message: `${prefix}: Rate limit error`, errorType: "quota" };
