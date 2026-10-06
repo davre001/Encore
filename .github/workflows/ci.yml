@@ -26,6 +26,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - run: npm ci
+      - run: node --test tests/upload.test.mjs
       - run: npm run build
 
   backend:

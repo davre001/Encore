@@ -2,6 +2,7 @@
 
 import errno
 import glob
+import json
 import logging
 import mimetypes
 import os
@@ -11,6 +12,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 from .. import storage
 from ..dependencies import get_user_id
@@ -167,23 +169,77 @@ async def upload_video(
 
 
 @router.post("/chunked/start")
-async def start_chunked_upload(
+def start_chunked_upload(
     filename: Optional[str] = None,
+    size: Optional[int] = None,
+    chunk_size: Optional[int] = None,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> dict:
     storage.ensure_dirs()
     ext = _safe_upload_name(filename)
     upload_id = storage.new_id("upload")
     part_path = os.path.join(storage.UPLOAD_DIR, f"{upload_id}{ext}.part")
+    if size is not None or chunk_size is not None:
+        if size is None or size <= 0 or chunk_size is None or not 0 < chunk_size <= 4 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Invalid upload size.")
+        if shutil.disk_usage(storage.UPLOAD_DIR).free < 2 * size + 64 * 1024 * 1024:
+            raise HTTPException(status_code=507, detail="Not enough space for this video.")
+        with open(part_path + ".json", "w", encoding="utf-8") as out:
+            json.dump({"size": size, "chunkSize": chunk_size, "userId": user_id}, out)
     with open(part_path, "wb"):
         pass
-    return {"uploadId": upload_id}
+    return {"uploadId": upload_id, "parallelChunks": size is not None}
+
+
+def _upload_manifest(part_path: str, user_id: Optional[str]) -> Optional[dict]:
+    if not os.path.exists(part_path + ".json"):
+        return None
+    with open(part_path + ".json", encoding="utf-8") as source:
+        manifest = json.load(source)
+    if manifest["userId"] != user_id:
+        raise HTTPException(status_code=404, detail="Upload session not found.")
+    return manifest
+
+
+def _write_upload_chunk(part_path: str, chunk: bytes, index: Optional[int], user_id: Optional[str]) -> dict:
+    manifest = _upload_manifest(part_path, user_id)
+    target = part_path
+    if manifest:
+        count = (manifest["size"] + manifest["chunkSize"] - 1) // manifest["chunkSize"]
+        if index is None or not 0 <= index < count:
+            raise HTTPException(status_code=400, detail="Invalid upload chunk index.")
+        expected = min(manifest["chunkSize"], manifest["size"] - index * manifest["chunkSize"])
+        if len(chunk) != expected:
+            raise HTTPException(status_code=400, detail="Upload chunk size does not match.")
+        target = f"{part_path}.chunk-{index}"
+    free = shutil.disk_usage(os.path.dirname(part_path)).free
+    if free < len(chunk) + 64 * 1024 * 1024:
+        raise HTTPException(status_code=507, detail="Not enough space for this video.")
+    try:
+        if manifest:
+            temporary = target + "." + storage.new_id("write")
+            try:
+                with open(temporary, "wb") as out:
+                    out.write(chunk)
+                os.replace(temporary, target)
+            finally:
+                if os.path.exists(temporary):
+                    os.remove(temporary)
+        else:
+            with open(target, "ab") as out:
+                out.write(chunk)
+    except OSError as exc:
+        if exc.errno == errno.ENOSPC:
+            raise HTTPException(status_code=507, detail="Not enough space for this video.") from exc
+        raise
+    return {"ok": True, "size": len(chunk) if manifest else os.path.getsize(part_path)}
 
 
 @router.post("/chunked/{upload_id}/chunk")
 async def append_upload_chunk(
     upload_id: str,
     request: Request,
+    index: Optional[int] = None,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> dict:
     storage.ensure_dirs()
@@ -194,27 +250,11 @@ async def append_upload_chunk(
     chunk = await request.body()
     if not chunk:
         raise HTTPException(status_code=400, detail="Upload chunk was empty.")
-    free = shutil.disk_usage(os.path.dirname(part_path)).free
-    if free < len(chunk) + 64 * 1024 * 1024:
-        raise HTTPException(
-            status_code=507,
-            detail="The disk is full, so this video could not be saved. Free some space and try again.",
-        )
-    try:
-        with open(part_path, "ab") as out:
-            out.write(chunk)
-    except OSError as exc:
-        if exc.errno == errno.ENOSPC:
-            raise HTTPException(
-                status_code=507,
-                detail="The disk is full, so this video could not be saved. Free some space and try again.",
-            ) from exc
-        raise
-    return {"ok": True, "size": os.path.getsize(part_path)}
+    return await run_in_threadpool(_write_upload_chunk, part_path, chunk, index, user_id)
 
 
 @router.post("/chunked/{upload_id}/finish", response_model=Video)
-async def finish_chunked_upload(
+def finish_chunked_upload(
     upload_id: str,
     filename: Optional[str] = None,
     user_id: Optional[str] = Depends(get_user_id),
@@ -223,6 +263,24 @@ async def finish_chunked_upload(
     if not matches:
         raise HTTPException(status_code=404, detail="Upload session not found.")
     part_path = matches[0]
+    manifest = _upload_manifest(part_path, user_id)
+    if manifest:
+        count = (manifest["size"] + manifest["chunkSize"] - 1) // manifest["chunkSize"]
+        paths = [f"{part_path}.chunk-{index}" for index in range(count)]
+        for index, path in enumerate(paths):
+            expected = min(manifest["chunkSize"], manifest["size"] - index * manifest["chunkSize"])
+            if not os.path.exists(path) or os.path.getsize(path) != expected:
+                raise HTTPException(status_code=409, detail="The upload is incomplete. Retry the missing chunks.")
+        if shutil.disk_usage(storage.UPLOAD_DIR).free < manifest["size"] + 64 * 1024 * 1024:
+            raise HTTPException(status_code=507, detail="Not enough space for this video.")
+        # Keep chunks until assembly succeeds so a failed finish remains retryable.
+        with open(part_path, "wb") as out:
+            for path in paths:
+                with open(path, "rb") as source:
+                    shutil.copyfileobj(source, out)
+        for path in paths:
+            os.remove(path)
+        os.remove(part_path + ".json")
     if os.path.getsize(part_path) <= 0:
         os.remove(part_path)
         raise HTTPException(status_code=400, detail="Upload body was empty.")

@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("/status")
-async def get_mind_status(
+def get_mind_status(
     user_id: Optional[str] = Depends(get_user_id),
 ) -> dict:
     """Minds (Animoca Builder API) wiring and this user's memory stats."""
@@ -28,7 +28,7 @@ async def get_mind_status(
 
 
 @router.get("/memories", response_model=list[MindMemoryResponse])
-async def list_memories(
+def list_memories(
     category: str | None = None,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> list[MindMemoryResponse]:
@@ -38,7 +38,7 @@ async def list_memories(
 
 
 @router.post("/memories", response_model=MindMemoryResponse)
-async def create_memory(
+def create_memory(
     body: MindMemoryCreate,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> MindMemoryResponse:
@@ -54,7 +54,7 @@ async def create_memory(
 
 
 @router.delete("/memories/{memory_id}")
-async def delete_memory(
+def delete_memory(
     memory_id: str,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> dict:
@@ -66,7 +66,7 @@ async def delete_memory(
 
 
 @router.post("/chat", response_model=Message)
-async def chat_with_mind(
+def chat_with_mind(
     body: ChatPromptRequest,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Message:

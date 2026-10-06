@@ -411,6 +411,16 @@ function timedOutAnalysisStatus(videoId: string): AnalysisStatus {
   };
 }
 
+function completedAnalysisStatus(videoId: string, count: number): AnalysisStatus {
+  return {
+    videoId,
+    stage: "complete",
+    message: `Found ${count} standout moment${count === 1 ? "" : "s"}.`,
+    updatedAt: Date.now(),
+    done: true,
+  };
+}
+
 /**
  * Read a file's real duration and pixel size off a throwaway <video>, so the
  * timeline can lay the take out at true time and the frame can open at the
@@ -1132,6 +1142,16 @@ export default function Editor() {
     const url = URL.createObjectURL(file);
     setMediaUrl(url);
 
+    // Transfer the file while the browser reads local playback metadata.
+    const uploadResult = api.uploadVideo(file, (progress, message) => {
+      setAnalysisStatus({
+        videoId: "pending", stage: "queued", message, progress,
+        updatedAt: Date.now(), done: false,
+      });
+    }).then(
+      (value) => ({ value, error: null }),
+      (error: unknown) => ({ value: null, error }),
+    );
     const probed = await probeMedia(url);
     // The take opens in its own shape. A ratio the creator picked — or one a
     // saved project restored — stands instead; only an untouched frame follows
@@ -1168,16 +1188,9 @@ export default function Editor() {
 
     try {
       // 1. Upload to backend
-      const nextVideo = await api.uploadVideo(file, (progress, message) => {
-        setAnalysisStatus({
-          videoId: "pending",
-          stage: "queued",
-          message,
-          progress,
-          updatedAt: Date.now(),
-          done: false,
-        });
-      });
+      const result = await uploadResult;
+      if (!result.value) throw result.error;
+      const nextVideo = result.value;
       setVideo(nextVideo);
       setAnalysisStatus({
         videoId: nextVideo.id,
@@ -1218,6 +1231,8 @@ export default function Editor() {
         }
         foundMoments = await api.listMoments(nextVideo.id);
         if (foundMoments && foundMoments.length > 0) {
+          latestStatus = completedAnalysisStatus(nextVideo.id, foundMoments.length);
+          setAnalysisStatus(latestStatus);
           break;
         }
         if (status?.done) {
@@ -2740,7 +2755,11 @@ export default function Editor() {
         setAnalysisStatus(status);
       }
       foundMoments = await api.listMoments(videoId);
-      if (foundMoments && foundMoments.length > 0) break;
+      if (foundMoments && foundMoments.length > 0) {
+        latestStatus = completedAnalysisStatus(videoId, foundMoments.length);
+        setAnalysisStatus(latestStatus);
+        break;
+      }
       if (status?.done) break;
     }
 
@@ -2777,7 +2796,7 @@ export default function Editor() {
       cancelled = true;
       rejoinAnalysisRef.current = null;
     };
-  }, [!!analysisStatus && !analysisStatus.done, actionStopped, aiPermissionMode, video?.id]);
+  }, [analysisStatus?.videoId, actionStopped, aiPermissionMode, video?.id]);
   async function regenerateMomentsFromChat(text: string) {
     const targetId = threadId;
     await api.saveEditorEvent(targetId, text, "you").catch(() => null);

@@ -107,47 +107,80 @@ export async function uploadVideo(
   onProgress?: (progress: number, message: string) => void,
 ): Promise<Video> {
   const filename = file.name || "take.mp4";
+  const chunkSize = 4 * 1024 * 1024;
   const qs = new URLSearchParams({ filename });
+  const startQs = new URLSearchParams({ filename, size: String(file.size), chunk_size: String(chunkSize) });
   onProgress?.(9, "Starting upload.");
   const start = await fetchWithTimeout(
-    `${API}/videos/chunked/start?${qs.toString()}`,
+    `${API}/videos/chunked/start?${startQs.toString()}`,
     {
       method: "POST",
       headers: userHeaders(),
     },
     30_000,
   );
-  const { uploadId } = await handleResponse<{ uploadId: string }>(start);
+  const { uploadId, parallelChunks } = await handleResponse<{ uploadId: string; parallelChunks?: boolean }>(start);
 
-  const chunkSize = 4 * 1024 * 1024;
-  let index = 0;
-  for (let offset = 0; offset < file.size; offset += chunkSize) {
+  let nextIndex = 0;
+  let uploaded = 0;
+  let failed = false;
+  const chunkCount = Math.ceil(file.size / chunkSize);
+  async function sendChunk(index: number) {
+    const offset = index * chunkSize;
     const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
-    const res = await fetchWithTimeout(
-      `${API}/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/octet-stream",
-          ...userHeaders(),
-        },
-        body: chunk,
-      },
-      120_000,
-    );
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(
-        `Upload chunk ${index + 1} failed (${res.status})${text ? `: ${text}` : ""}`
-      );
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const res = await fetchWithTimeout(
+          `${API}/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              ...userHeaders(),
+            },
+            body: chunk,
+          },
+          120_000,
+        );
+        if (!res.ok) {
+          if (parallelChunks && attempt < 2 && (res.status === 429 || res.status >= 500)) {
+            await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+            continue;
+          }
+          await handleResponse(res);
+        }
+        break;
+      } catch (error) {
+        // Indexed chunks are safe to retry; legacy append-only uploads are not.
+        if (!parallelChunks || attempt >= 2 || !(error instanceof TypeError || (error instanceof Error && error.message.startsWith("Upload timed out")))) {
+          throw error;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+      }
     }
-    index += 1;
-    const uploaded = Math.min(offset + chunk.size, file.size);
+    uploaded += chunk.size;
     const percent = file.size > 0 ? uploaded / file.size : 1;
     onProgress?.(
       Math.round(10 + percent * 8),
       `Uploading video (${Math.round(percent * 100)}%).`,
     );
+  }
+  async function worker() {
+    while (!failed && nextIndex < chunkCount) {
+      const index = nextIndex++;
+      try {
+        await sendChunk(index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  }
+  const results = await Promise.allSettled(
+    Array.from({ length: Math.min(parallelChunks ? 3 : 1, chunkCount) }, () => worker()),
+  );
+  for (const result of results) {
+    if (result.status === "rejected") throw result.reason;
   }
 
   onProgress?.(19, "Finishing upload.");

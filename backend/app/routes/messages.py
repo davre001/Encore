@@ -20,7 +20,7 @@ log = logging.getLogger("encore.messages")
 
 
 @router.get("/{thread_id}", response_model=list[Message])
-async def list_messages(
+def list_messages(
     thread_id: str,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> list[Message]:
@@ -30,7 +30,7 @@ async def list_messages(
 
 
 @router.post("/events", response_model=Message)
-async def save_editor_event(
+def save_editor_event(
     body: MessageEventCreate,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Message:
@@ -46,7 +46,7 @@ async def save_editor_event(
 
 
 @router.post("", response_model=Message)
-async def send_message(
+def send_message(
     body: MessageCreate,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Message:
