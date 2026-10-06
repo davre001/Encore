@@ -24,7 +24,6 @@ const CONFIGURED_BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "
 /** Direct backend origin for long-running publish and analytics requests. */
 const BACKEND =
   CONFIGURED_BACKEND || "http://127.0.0.1:5000";
-const UPLOAD_API = CONFIGURED_BACKEND ? `${CONFIGURED_BACKEND}/api` : API;
 
 const TOKEN_KEY = "encore.accessToken";
 
@@ -111,7 +110,7 @@ export async function uploadVideo(
   const qs = new URLSearchParams({ filename });
   onProgress?.(9, "Starting upload.");
   const start = await fetchWithTimeout(
-    `${UPLOAD_API}/videos/chunked/start?${qs.toString()}`,
+    `${API}/videos/chunked/start?${qs.toString()}`,
     {
       method: "POST",
       headers: userHeaders(),
@@ -125,7 +124,7 @@ export async function uploadVideo(
   for (let offset = 0; offset < file.size; offset += chunkSize) {
     const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
     const res = await fetchWithTimeout(
-      `${UPLOAD_API}/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
+      `${API}/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
       {
         method: "POST",
         headers: {
@@ -153,7 +152,7 @@ export async function uploadVideo(
 
   onProgress?.(19, "Finishing upload.");
   const finish = await fetchWithTimeout(
-    `${UPLOAD_API}/videos/chunked/${encodeURIComponent(uploadId)}/finish?${qs.toString()}`,
+    `${API}/videos/chunked/${encodeURIComponent(uploadId)}/finish?${qs.toString()}`,
     {
       method: "POST",
       headers: userHeaders(),
