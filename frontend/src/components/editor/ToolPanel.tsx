@@ -157,6 +157,13 @@ const ANALYSIS_PROGRESS: Record<AnalysisStatus["stage"], number> = {
   error: 100,
 };
 
+function analysisProgress(status: AnalysisStatus): number {
+  return Math.max(
+    0,
+    Math.min(100, status.progress ?? ANALYSIS_PROGRESS[status.stage]),
+  );
+}
+
 const SLASH_COMMANDS = [
   {
     command: "/redo",
@@ -322,7 +329,7 @@ export default function ToolPanel(props: ToolPanelProps) {
           <div className="cut__chat-progress" aria-live="polite">
             <div className="cut__chat-progress-top">
               <span>{displayAnalysisMessage(props.analysisStatus, !!video)}</span>
-              <b>{ANALYSIS_PROGRESS[props.analysisStatus.stage]}%</b>
+              <b>{analysisProgress(props.analysisStatus)}%</b>
               <button
                 type="button"
                 className="cut__progress-stop"
@@ -336,7 +343,7 @@ export default function ToolPanel(props: ToolPanelProps) {
             <span className="cut__chat-progress-track">
               <i
                 style={{
-                  width: `${ANALYSIS_PROGRESS[props.analysisStatus.stage]}%`,
+                  width: `${analysisProgress(props.analysisStatus)}%`,
                 }}
               />
             </span>
@@ -842,5 +849,4 @@ export default function ToolPanel(props: ToolPanelProps) {
     </section>
   );
 }
-
 

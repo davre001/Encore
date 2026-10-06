@@ -20,9 +20,11 @@ import type {
 } from "../types";
 
 const API = "/api";
+const CONFIGURED_BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "");
 /** Direct backend origin for long-running publish and analytics requests. */
 const BACKEND =
-  process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:5000";
+  CONFIGURED_BACKEND || "http://127.0.0.1:5000";
+const UPLOAD_API = CONFIGURED_BACKEND ? `${CONFIGURED_BACKEND}/api` : API;
 
 const TOKEN_KEY = "encore.accessToken";
 
@@ -81,22 +83,49 @@ async function handleResponse<T>(res: Response): Promise<T> {
   return res.json();
 }
 
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("Upload timed out. Check your connection and try again.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 /** Upload a video file to kick off duration probe + background moment detection. */
-export async function uploadVideo(file: File): Promise<Video> {
+export async function uploadVideo(
+  file: File,
+  onProgress?: (progress: number, message: string) => void,
+): Promise<Video> {
   const filename = file.name || "take.mp4";
   const qs = new URLSearchParams({ filename });
-  const start = await fetch(`${API}/videos/chunked/start?${qs.toString()}`, {
-    method: "POST",
-    headers: userHeaders(),
-  });
+  onProgress?.(9, "Starting upload.");
+  const start = await fetchWithTimeout(
+    `${UPLOAD_API}/videos/chunked/start?${qs.toString()}`,
+    {
+      method: "POST",
+      headers: userHeaders(),
+    },
+    30_000,
+  );
   const { uploadId } = await handleResponse<{ uploadId: string }>(start);
 
   const chunkSize = 4 * 1024 * 1024;
   let index = 0;
   for (let offset = 0; offset < file.size; offset += chunkSize) {
     const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
-    const res = await fetch(
-      `${API}/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
+    const res = await fetchWithTimeout(
+      `${UPLOAD_API}/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
       {
         method: "POST",
         headers: {
@@ -104,7 +133,8 @@ export async function uploadVideo(file: File): Promise<Video> {
           ...userHeaders(),
         },
         body: chunk,
-      }
+      },
+      120_000,
     );
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -113,14 +143,22 @@ export async function uploadVideo(file: File): Promise<Video> {
       );
     }
     index += 1;
+    const uploaded = Math.min(offset + chunk.size, file.size);
+    const percent = file.size > 0 ? uploaded / file.size : 1;
+    onProgress?.(
+      Math.round(10 + percent * 8),
+      `Uploading video (${Math.round(percent * 100)}%).`,
+    );
   }
 
-  const finish = await fetch(
-    `${API}/videos/chunked/${encodeURIComponent(uploadId)}/finish?${qs.toString()}`,
+  onProgress?.(19, "Finishing upload.");
+  const finish = await fetchWithTimeout(
+    `${UPLOAD_API}/videos/chunked/${encodeURIComponent(uploadId)}/finish?${qs.toString()}`,
     {
       method: "POST",
       headers: userHeaders(),
-    }
+    },
+    120_000,
   );
   return handleResponse<Video>(finish);
 }

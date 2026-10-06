@@ -43,6 +43,8 @@ export type AnalysisStatus = {
     | "empty"
     | "error";
   message: string;
+  /** Optional live progress for browser-side phases such as file upload. */
+  progress?: number;
   updatedAt: number;
   errorType?: "network" | "timeout" | "quota" | "api" | "unknown" | null;
   done: boolean;

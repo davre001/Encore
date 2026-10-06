@@ -721,40 +721,33 @@ export default function Editor() {
           setTime(proj.playhead);
         }
         if (proj.videoId) {
-          setMediaUrl(api.videoFileUrl(proj.videoId));
-          setVideo({
-            id: proj.videoId,
-            name: proj.name || "take",
-            duration: proj.takeOut || 0,
-            createdAt: proj.createdAt,
-          });
-          api
+          // Project rows persist in the database, but Render's local upload
+          // directory may be replaced during a deployment. Verify the source
+          // record before enabling playback or reconnecting an analysis poll.
+          void api
             .getVideo(proj.videoId)
-            .then((v) => {
-              if (mounted && v) setVideo(v);
+            .then(async (restoredVideo) => {
+              if (!mounted) return;
+              setVideo(restoredVideo);
+              setMediaUrl(api.videoFileUrl(proj.videoId!));
+              const [foundMoments, foundClips, status] = await Promise.all([
+                api.listMoments(proj.videoId!).catch(() => []),
+                api.listClips(proj.videoId!).catch(() => []),
+                api.getAnalysisStatus(proj.videoId!).catch(() => null),
+              ]);
+              if (!mounted) return;
+              setMoments(foundMoments);
+              setClips(foundClips);
+              serverClipIds.current = new Set(foundClips.map((clip) => clip.id));
+              setSelectedClipId(foundClips[0]?.id ?? null);
+              if (status) setAnalysisStatus(status);
             })
-            .catch(() => {});
-          api
-            .listMoments(proj.videoId)
-            .then((found) => {
-              if (mounted && found) setMoments(found);
-            })
-            .catch(() => {});
-          api
-            .listClips(proj.videoId)
-            .then((found) => {
-              if (!mounted || !found) return;
-              setClips(found);
-              serverClipIds.current = new Set(found.map((clip) => clip.id));
-              setSelectedClipId(found[0]?.id ?? null);
-            })
-            .catch(() => {});
-          api
-            .getAnalysisStatus(proj.videoId)
-            .then((status) => {
-              if (mounted && status) setAnalysisStatus(status);
-            })
-            .catch(() => {});
+            .catch(() => {
+              if (!mounted) return;
+              setVideo(null);
+              setMediaUrl(null);
+              setAnalysisStatus(null);
+            });
         }
         setSaveStatus("saved");
       })
@@ -1090,6 +1083,9 @@ export default function Editor() {
     }
     clearStoppedAction();
     setBusy(true);
+    // Do not let refresh-resume polling follow the previous take while this
+    // file is being uploaded. Render may no longer have that local record.
+    setVideo(null);
     setAnalysisStatus({
       videoId: "pending",
       stage: "queued",
@@ -1172,7 +1168,16 @@ export default function Editor() {
 
     try {
       // 1. Upload to backend
-      const nextVideo = await api.uploadVideo(file);
+      const nextVideo = await api.uploadVideo(file, (progress, message) => {
+        setAnalysisStatus({
+          videoId: "pending",
+          stage: "queued",
+          message,
+          progress,
+          updatedAt: Date.now(),
+          done: false,
+        });
+      });
       setVideo(nextVideo);
       setAnalysisStatus({
         videoId: nextVideo.id,
