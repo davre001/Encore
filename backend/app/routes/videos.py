@@ -2,12 +2,14 @@
 
 import errno
 import glob
+import logging
 import mimetypes
 import os
 import shutil
+import threading
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import storage
@@ -18,7 +20,10 @@ from ..services import analyze, ffmpeg, gemini, transcribe
 router = APIRouter()
 
 _ACTIVE_ANALYSES: set[str] = set()
+_ACTIVE_ANALYSES_LOCK = threading.Lock()
+STALE_DISPATCH_MS = 10_000
 STALE_ANALYSIS_MS = 90_000
+logger = logging.getLogger(__name__)
 
 
 def _status(video_id: str, stage: str, message: str, **extra) -> None:
@@ -41,7 +46,6 @@ def _safe_upload_name(filename: str | None) -> str:
 
 def _save_video_record(
     *,
-    background_tasks: BackgroundTasks,
     src_path: str,
     filename: str | None,
     user_id: Optional[str],
@@ -65,14 +69,35 @@ def _save_video_record(
     # A mind line here was written with nobody having asked, and it is the same
     # class of leak as a "Kept …" confirmation after a click.
 
-    background_tasks.add_task(_propose_moments, video.id, src_path, duration)
+    _start_analysis(video.id, src_path, duration)
     return video
+
+
+def _start_analysis(video_id: str, src_path: str, duration: float) -> None:
+    """Start analysis independently from the request/response lifecycle."""
+    try:
+        threading.Thread(
+            target=_propose_moments,
+            args=(video_id, src_path, duration),
+            daemon=True,
+            name=f"video-analysis-{video_id}",
+        ).start()
+    except RuntimeError:
+        logger.exception("Could not start analysis worker for video %s", video_id)
+        _status(
+            video_id,
+            "error",
+            "The video analysis could not start.",
+            errorType="server",
+        )
+
 
 def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
     """Background analysis pipeline. Never raises."""
-    if video_id in _ACTIVE_ANALYSES:
-        return
-    _ACTIVE_ANALYSES.add(video_id)
+    with _ACTIVE_ANALYSES_LOCK:
+        if video_id in _ACTIVE_ANALYSES:
+            return
+        _ACTIVE_ANALYSES.add(video_id)
     try:
         _status(video_id, "thinking", "Preparing the video for analysis.")
         _status(video_id, "transcribing", "Reading the audio and speech timing.")
@@ -110,6 +135,7 @@ def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
                 "Finished analysis, but no strong standalone moments were found.",
             )
     except Exception:
+        logger.exception("Video analysis failed for video %s", video_id)
         storage.save_moments(video_id, [])
         _status(
             video_id,
@@ -118,18 +144,17 @@ def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
             errorType="unknown",
         )
     finally:
-        _ACTIVE_ANALYSES.discard(video_id)
+        with _ACTIVE_ANALYSES_LOCK:
+            _ACTIVE_ANALYSES.discard(video_id)
 
 
 @router.post("", response_model=Video)
 async def upload_video(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Video:
     src_path = storage.save_upload(file)
     return _save_video_record(
-        background_tasks=background_tasks,
         src_path=src_path,
         filename=file.filename,
         user_id=user_id,
@@ -186,7 +211,6 @@ async def append_upload_chunk(
 @router.post("/chunked/{upload_id}/finish", response_model=Video)
 async def finish_chunked_upload(
     upload_id: str,
-    background_tasks: BackgroundTasks,
     filename: Optional[str] = None,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Video:
@@ -200,7 +224,6 @@ async def finish_chunked_upload(
     final_path = part_path[:-5]
     os.replace(part_path, final_path)
     return _save_video_record(
-        background_tasks=background_tasks,
         src_path=final_path,
         filename=filename,
         user_id=user_id,
@@ -209,7 +232,6 @@ async def finish_chunked_upload(
 @router.post("/raw", response_model=Video)
 async def upload_video_raw(
     request: Request,
-    background_tasks: BackgroundTasks,
     filename: Optional[str] = None,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Video:
@@ -235,7 +257,6 @@ async def upload_video_raw(
         raise HTTPException(status_code=400, detail="Upload body was empty.")
 
     return _save_video_record(
-        background_tasks=background_tasks,
         src_path=src_path,
         filename=filename or request.headers.get("x-file-name"),
         user_id=user_id,
@@ -245,7 +266,6 @@ async def upload_video_raw(
 @router.post("/{video_id}/analysis/retry", response_model=AnalysisStatus)
 async def retry_analysis(
     video_id: str,
-    background_tasks: BackgroundTasks,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> AnalysisStatus:
     record = storage.get_video(video_id)
@@ -263,8 +283,7 @@ async def retry_analysis(
     if video_id not in _ACTIVE_ANALYSES:
         storage.save_moments(video_id, [])
         _status(video_id, "queued", "Regenerating moments from the video.")
-        background_tasks.add_task(
-            _propose_moments,
+        _start_analysis(
             video_id,
             src_path,
             float(record.get("duration") or 0),
@@ -276,7 +295,6 @@ async def retry_analysis(
 @router.get("/{video_id}/analysis", response_model=AnalysisStatus)
 async def get_analysis_status(
     video_id: str,
-    background_tasks: BackgroundTasks,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> AnalysisStatus:
     record = storage.get_video(video_id)
@@ -307,17 +325,21 @@ async def get_analysis_status(
         "generating",
     }
     age_ms = storage.now_ms() - int(status.get("updatedAt") or 0)
+    stale_after_ms = (
+        STALE_DISPATCH_MS
+        if status.get("stage") in {"queued", "uploaded"}
+        else STALE_ANALYSIS_MS
+    )
     src_path = record.get("srcPath")
     if (
         is_running_status
         and video_id not in _ACTIVE_ANALYSES
-        and age_ms > STALE_ANALYSIS_MS
+        and age_ms > stale_after_ms
         and src_path
         and os.path.isfile(src_path)
     ):
         _status(video_id, "queued", "Resuming analysis after refresh.")
-        background_tasks.add_task(
-            _propose_moments,
+        _start_analysis(
             video_id,
             src_path,
             float(record.get("duration") or 0),
