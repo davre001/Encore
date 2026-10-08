@@ -12,7 +12,7 @@
 
 import { chromium } from "playwright-core";
 
-const BASE = "http://localhost:3000";
+const BASE = process.env.EDITOR_TEST_URL || "http://localhost:3000";
 const LABELS = [
   "The 2 a.m. spiral",
   "Clicking a suspicious link",
@@ -67,6 +67,7 @@ async function scenario({
   videoId = "vid_test",
   threads = {},
   steps = null,
+  publishError = null,
 }) {
   console.log(`\n${title}`);
 
@@ -88,6 +89,7 @@ async function scenario({
 
   const browser = await chromium.launch({ channel: "msedge", headless: true });
   const page = await browser.newPage();
+  page.on("pageerror", (error) => console.error("Editor browser error:", error.message));
 
   // Capture every label the progress loader shows, in order, along with which
   // panel was open at the time. Polling would miss the short-lived stages, so
@@ -181,6 +183,7 @@ async function scenario({
     if (path.startsWith("/api/posts/") && method === "POST") {
       const id = decodeURIComponent(path.split("/")[3]);
       state.posts.push(id);
+      if (publishError) return json(route, { detail: publishError }, 409);
       const found = state.clips.find((c) => c.id === id);
       if (found) Object.assign(found, { posted: true, postId: "post_x", postUrl: "https://youtube.com/shorts/x" });
       return json(route, { postId: "post_x", postUrl: "https://youtube.com/shorts/x" });
@@ -260,7 +263,9 @@ async function scenario({
         body: Buffer.from(STUB_MP4, "base64"),
       });
     }
-    if (path.startsWith("/api/analysis")) return json(route, { videoId, stage: "complete", message: "Done.", updatedAt: Date.now(), done: true });
+    if (path.startsWith("/api/analysis") || (path.startsWith("/api/videos/") && path.endsWith("/analysis"))) {
+      return json(route, { videoId, stage: "complete", message: "Done.", updatedAt: Date.now(), done: true });
+    }
     // Any video with no fixture moments: a take that turned up nothing is one of
     // the states a fresh project can be in.
     if (path.startsWith("/api/moments/") && method === "GET") return json(route, []);
@@ -269,6 +274,7 @@ async function scenario({
 
   await page.goto(projectId ? `${BASE}/editor?project=${projectId}` : `${BASE}/editor`, {
     waitUntil: "domcontentloaded",
+    timeout: 90_000,
   });
 
   /** Wait until nothing is in flight and the progress loader is gone. */
@@ -300,9 +306,9 @@ async function scenario({
 
   // The composer lives on the Mind tab, which is where a creator types — and the
   // panel the editor navigates away from once it starts cutting or publishing.
-  await page.click('button[title="Talk to Encore"]');
-  await page.waitForSelector('input[aria-label="Ask Encore"]', { timeout: 45000 });
   if (text) {
+    await page.click('button[title="Talk to Encore"]');
+    await page.waitForSelector('input[aria-label="Ask Encore"]', { timeout: 45000 });
     await page.fill('input[aria-label="Ask Encore"]', text);
     await page.click('button[aria-label="Send"]');
   }
@@ -325,6 +331,7 @@ async function scenario({
 // Nothing may be said until the creator says something. These two load the same
 // half-finished job and simply never type: whatever lands in the thread would be
 // the editor talking to itself.
+if (!process.env.PUBLISH_ONLY) {
 const silentPending = await scenario({
   title: "no prompt — moments sitting undecided",
   mode: "auto",
@@ -493,6 +500,30 @@ const cold = await scenario({
 check("a cold editor reads no thread at all", !cold.state.requests.some((r) => r.startsWith("GET /api/messages/")), JSON.stringify(cold.state.requests.filter((r) => r.includes("/api/messages"))));
 check("a cold editor shows an empty thread", cold.mindBubbles === 0 && cold.youBubbles === 0, `${cold.mindBubbles} AI / ${cold.youBubbles} you`);
 check("nothing is said on arrival", !/ENCORE/.test(cold.chat));
+}
+
+for (const [detail, expected] of [
+  ["Connect a YouTube channel in Settings before posting.", "Reconnect your YouTube channel in Settings."],
+  ["The source video file is missing, so this cut cannot be uploaded.", "The source video is no longer available. Upload it again."],
+]) {
+  const result = await scenario({
+    title: `publishing conflict: ${detail}`,
+    mode: "auto",
+    moments: [moment(1, "accepted")],
+    clips: [clip("mom_1", "clip_mom_1")],
+    publishError: detail,
+    text: null,
+    steps: async ({ page, state, settle }) => {
+      await settle();
+      check("publish request was attempted", state.posts.length > 0);
+      check("failed publishing clears its loader", await page.locator(".cut__chat-progress").count() === 0);
+      await page.click('button[title="Cuts ready to ship"]');
+      check("error is visible in Cuts", await page.locator(".cut__status-text").filter({ hasText: expected }).isVisible());
+      check("error is not a chat bubble", await page.locator(".cut__bubble").filter({ hasText: expected }).count() === 0);
+    },
+  });
+  check("failed upload never announces a posted link", !/Watch it here:/.test(result.chat));
+}
 
 // ---------------------------------------------------------------------------
 

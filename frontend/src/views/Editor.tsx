@@ -997,6 +997,9 @@ export default function Editor() {
   } {
     const raw = err instanceof Error ? err.message : String(err || "Unknown error");
     const lower = raw.toLowerCase();
+    if (lower.includes("connect a youtube channel")) {
+      return { message: "Reconnect your YouTube channel in Settings.", errorType: "api" };
+    }
     if (
       lower.includes("video file not found") ||
       lower.includes("video not found") ||
@@ -2577,16 +2580,19 @@ export default function Editor() {
       return false;
     }
     publishingClipIds.current.add(publishKey);
+    let serverPublishKey: string | null = null;
+    setStatusText(null);
     try {
       setActionProgress({ label: `Preparing "${clip.title}"`, percent: 36 });
       const ready = await ensureServerClip(clip);
       if (publishedClipIds.current.has(ready.id)) return false;
+      serverPublishKey = ready.id;
+      publishingClipIds.current.add(ready.id);
       setActionProgress({
         label: `Publishing "${clip.title}" to YouTube`,
         percent: 74,
       });
       const { postId, postUrl } = await api.postClip(ready.id);
-      publishingClipIds.current.add(ready.id);
       publishedClipIds.current.add(clip.id);
       publishedClipIds.current.add(ready.id);
       setActionProgress({ label: `Published "${clip.title}"`, percent: 100 });
@@ -2684,6 +2690,8 @@ export default function Editor() {
       return false;
     } finally {
       publishingClipIds.current.delete(clip.id);
+      if (serverPublishKey) publishingClipIds.current.delete(serverPublishKey);
+      setActionProgress(null);
     }
   }
   async function handleExport(target: ExportTarget) {
@@ -3104,7 +3112,6 @@ export default function Editor() {
       pushMind(`“${clip.title}” is already on YouTube. I won't post it again.`);
       return;
     }
-    pushMind(`Publishing “${clip.title}” — the cut you selected.`);
     setBusy(true);
     setTool("cuts");
     try {

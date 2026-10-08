@@ -369,6 +369,11 @@ export default function ToolPanel(props: ToolPanelProps) {
             </span>
           </div>
         ) : null}
+        {props.statusText ? (
+          <p className="cut__thinking cut__status-text" role="status" aria-live="polite">
+            {props.statusText}
+          </p>
+        ) : null}
         {/* ---- Take: the source long video ---- */}
         {tool === "take" ? (
           video ? (
@@ -784,10 +789,6 @@ export default function ToolPanel(props: ToolPanelProps) {
               {props.chatBusy ? (
                 <p className="cut__thinking" aria-live="polite">
                   Thinking...
-                </p>
-              ) : props.statusText ? (
-                <p className="cut__thinking cut__status-text" aria-live="polite">
-                  {props.statusText}
                 </p>
               ) : null}
             </div>
