@@ -80,7 +80,7 @@ PORT = int(os.getenv("PORT", "5000"))
 
 # --- CORS ------------------------------------------------------------------
 _cors_origins = [
-    origin.strip()
+    origin.strip().rstrip("/")
     for origin in os.getenv(
         "CORS_ORIGINS", "http://localhost:3000,http://localhost:3001"
     ).split(",")
@@ -89,7 +89,13 @@ _cors_origins = [
 # FRONTEND_ORIGIN already identifies the one deployed UI used by OAuth
 # redirects. Include that exact origin in CORS too so production browser
 # requests cannot drift from the redirect configuration.
-CORS_ORIGINS = list(dict.fromkeys([*_cors_origins, FRONTEND_ORIGIN]))
+CORS_ORIGINS = list(dict.fromkeys([
+    *_cors_origins,
+    FRONTEND_ORIGIN.rstrip("/"),
+    # Publishing goes directly to Render rather than through the upload proxy.
+    # Keep the deployed Encore UI trusted even if Render still has local defaults.
+    "https://encore-dun-eight.vercel.app",
+]))
 
 
 def _has_module(name: str) -> bool:
