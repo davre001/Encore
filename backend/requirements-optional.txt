@@ -13,8 +13,5 @@ faster-whisper
 # Minds by Animoca Brands needs nothing here: the Builder API is plain HTTP over
 # httpx (a core dep), and Animoca ships no Python SDK. Set MINDS_BUILDER_API_KEY.
 
-# YouTube Data API publish + stats.
-google-api-python-client
-google-auth
+# Optional local OAuth helpers; publish + stats dependencies are in the core.
 google-auth-oauthlib
-google-auth-httplib2

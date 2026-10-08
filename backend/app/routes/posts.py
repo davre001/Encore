@@ -1,6 +1,7 @@
 """Posts - publish a rendered clip to YouTube and grade it later."""
 
 import json
+import logging
 import os
 import time
 
@@ -19,6 +20,7 @@ from ..models.schemas import PostCheck, PublishResult
 from ..services import analytics, ffmpeg, playbook, youtube
 
 router = APIRouter()
+logger = logging.getLogger("uvicorn.error.encore.posts")
 
 
 def _upload_path_for_clip(clip: dict) -> str | None:
@@ -161,6 +163,7 @@ async def publish_clip(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
+        logger.error("YouTube publishing unavailable for clip %s: %s", clip_id, exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except HttpError as exc:
         raise HTTPException(status_code=502, detail=_youtube_error_message(exc)) from exc

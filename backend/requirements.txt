@@ -9,5 +9,10 @@ sqlalchemy>=2.0
 psycopg[binary]>=3.1
 psycopg2-binary>=2.9
 
+# YouTube publishing must work in the standard Render installation.
+google-api-python-client
+google-auth[requests]
+google-auth-httplib2
+
 # Optional real integrations live in requirements-optional.txt so the server
 # runs (in deterministic-fallback mode) with just the core installed.
