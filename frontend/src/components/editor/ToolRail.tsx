@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { motion } from "motion/react";
 import {
   BookmarkCheck,
@@ -32,12 +33,13 @@ const TOOLS: {
 ];
 
 type ToolRailProps = {
+  progress?: ReactNode;
   tool: ToolId;
   counts: Partial<Record<ToolId, number>>;
   onTool: (tool: ToolId) => void;
 };
 
-export default function ToolRail({ tool, counts, onTool }: ToolRailProps) {
+export default function ToolRail({ tool, counts, onTool, progress }: ToolRailProps) {
   return (
     <nav className="cut__rail" aria-label="Editor tools">
       {TOOLS.map(({ id, label, title, Icon }) => {
@@ -69,6 +71,7 @@ export default function ToolRail({ tool, counts, onTool }: ToolRailProps) {
           </button>
         );
       })}
+      {progress}
       <span className="cut__rail-fill" aria-hidden="true" />
       <span className="cut__rail-div" aria-hidden="true" />
       <Link

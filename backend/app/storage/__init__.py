@@ -288,6 +288,28 @@ def get_transcript(video_id: str) -> Optional[list[dict]]:
 
 
 # --- caption jobs ----------------------------------------------------------
+def save_publish_job(clip_id: str, job: dict) -> dict:
+    record = {"clipId": clip_id, "updatedAt": now_ms(), **job}
+    with _LOCK:
+        rows = [row for row in _read("publish_jobs") if row.get("clipId") != clip_id]
+        rows.append(record)
+        _write("publish_jobs", rows)
+    return record
+
+
+def get_publish_job(clip_id: str) -> Optional[dict]:
+    rows = _list_by("publish_jobs", "clipId", clip_id)
+    return rows[-1] if rows else None
+
+
+def get_upload_receipt(upload_id: str) -> Optional[dict]:
+    return _get("upload_receipts", upload_id)
+
+
+def save_upload_receipt(upload_id: str, user_id: Optional[str], video: dict) -> dict:
+    return _insert("upload_receipts", {"id": upload_id, "userId": user_id, "video": video})
+
+
 def save_caption_job(clip_id: str, job: dict) -> dict:
     """Progress for one clip's caption generation, one record per clip."""
     record = {

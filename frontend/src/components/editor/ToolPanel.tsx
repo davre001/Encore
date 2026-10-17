@@ -146,25 +146,6 @@ function displayAnalysisMessage(status: AnalysisStatus | null, hasVideo: boolean
   }
   return status.message || (hasVideo ? "Analysis updates will appear here as the video is processed." : null);
 }
-const ANALYSIS_PROGRESS: Record<AnalysisStatus["stage"], number> = {
-  queued: 8,
-  uploaded: 14,
-  thinking: 26,
-  transcribing: 44,
-  watching: 68,
-  generating: 86,
-  complete: 100,
-  empty: 100,
-  error: 100,
-};
-
-function analysisProgress(status: AnalysisStatus): number {
-  return Math.max(
-    0,
-    Math.min(100, status.progress ?? ANALYSIS_PROGRESS[status.stage]),
-  );
-}
-
 const SLASH_COMMANDS = [
   {
     command: "/redo",
@@ -317,58 +298,6 @@ export default function ToolPanel(props: ToolPanelProps) {
       </header>
 
       <div className="cut__panel-body">
-        {/* Progress belongs to the panel, not to the chat thread. It reports what
-            the editor itself is doing, and those jobs are exactly the ones that
-            move the panel off Mind — cutting and publishing both select another
-            tab — so while it lived inside the thread the loader disappeared at
-            the very moment there was something to wait for. */}
-        {/* While analysis is actually running, the bar follows the polled backend
-            stage (message + a percent derived from that stage) so it tallies with
-            the real job. actionProgress is only for the phases the backend cannot
-            report, e.g. cutting, captioning, publishing. */}
-        {props.analysisStatus && !props.analysisStatus.done ? (
-          <div className="cut__chat-progress" aria-live="polite">
-            <div className="cut__chat-progress-top">
-              <span>{displayAnalysisMessage(props.analysisStatus, !!video)}</span>
-              <b>{analysisProgress(props.analysisStatus)}%</b>
-              <button
-                type="button"
-                className="cut__progress-stop"
-                aria-label="Stop current action"
-                title="Stop current action"
-                onClick={props.onStopAction}
-              >
-                <Square aria-hidden="true" />
-              </button>
-            </div>
-            <span className="cut__chat-progress-track">
-              <i
-                style={{
-                  width: `${analysisProgress(props.analysisStatus)}%`,
-                }}
-              />
-            </span>
-          </div>
-        ) : props.actionProgress ? (
-          <div className="cut__chat-progress" aria-live="polite">
-            <div className="cut__chat-progress-top">
-              <span>{props.actionProgress.label}</span>
-              <b>{props.actionProgress.percent}%</b>
-              <button
-                type="button"
-                className="cut__progress-stop"
-                aria-label="Stop current action"
-                title="Stop current action"
-                onClick={props.onStopAction}
-              >
-                <Square aria-hidden="true" />
-              </button>
-            </div>
-            <span className="cut__chat-progress-track">
-              <i style={{ width: `${props.actionProgress.percent}%` }} />
-            </span>
-          </div>
-        ) : null}
         {props.statusText ? (
           <p className="cut__thinking cut__status-text" role="status" aria-live="polite">
             {props.statusText}

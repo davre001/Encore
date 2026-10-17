@@ -8,20 +8,27 @@ should require a connected user before calling publish for real posting.
 from __future__ import annotations
 
 import os
+import time
+from functools import partial
 from typing import Optional
 
 try:
     from google.auth.transport.requests import Request
+    from google.auth.exceptions import TransportError
+    from google_auth_httplib2 import AuthorizedHttp
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaFileUpload
+    from httplib2 import Http, ServerNotFoundError
 except ImportError:  # optional dependency in local dev
     Request = None
     Credentials = None
     build = None
     HttpError = Exception
     MediaFileUpload = None
+    TransportError = ServerNotFoundError = OSError
+    AuthorizedHttp = Http = None
 
 from .. import storage
 from ..config import (
@@ -63,11 +70,11 @@ def _service(refresh_token: str):
         client_secret=YOUTUBE_CLIENT_SECRET,
         scopes=SCOPES,
     )
-    credentials.refresh(Request())
-    return build("youtube", "v3", credentials=credentials)
+    credentials.refresh(partial(Request(), timeout=30))
+    return build("youtube", "v3", http=AuthorizedHttp(credentials, http=Http(timeout=30)))
 
 
-def publish(clip: dict, src_path: Optional[str] = None, user_id: Optional[str] = None) -> dict:
+def publish(clip: dict, src_path: Optional[str] = None, user_id: Optional[str] = None, on_progress=None) -> dict:
     refresh_token = _refresh_token_for_user(user_id)
     if not (YOUTUBE_CLIENT_ID.strip() and YOUTUBE_CLIENT_SECRET.strip() and refresh_token):
         raise RuntimeError("Connect a YouTube channel in Settings before posting.")
@@ -94,13 +101,52 @@ def publish(clip: dict, src_path: Optional[str] = None, user_id: Optional[str] =
             "selfDeclaredMadeForKids": False,
         },
     }
-    media = MediaFileUpload(src_path, chunksize=-1, resumable=True)
-    response = (
-        _service(refresh_token)
+    media = MediaFileUpload(src_path, chunksize=2 * 1024 * 1024, resumable=True)
+    service = None
+    disconnected_at = None
+    while service is None:
+        try:
+            service = _service(refresh_token)
+        except (OSError, TransportError, ServerNotFoundError):
+            if disconnected_at is None:
+                disconnected_at = time.monotonic()
+            elapsed = time.monotonic() - disconnected_at
+            if elapsed >= 1800:
+                raise RuntimeError("YouTube connection timed out.")
+            if on_progress:
+                on_progress("reconnecting", "Connection error, check your network." if elapsed >= 120 else (
+                    "This is taking longer than usual." if elapsed >= 60 else "Connecting to YouTube."
+                ), 35)
+            time.sleep(5)
+    request = (
+        service
         .videos()
         .insert(part="snippet,status", body=body, media_body=media)
-        .execute()
     )
+    response = None
+    disconnected_at = None
+    while response is None:
+        try:
+            status, response = request.next_chunk(num_retries=2)
+            disconnected_at = None
+            if status and on_progress:
+                on_progress("uploading", "Uploading the cut to YouTube.", 35 + int(status.progress() * 60))
+        except (OSError, TransportError, ServerNotFoundError, HttpError) as exc:
+            http_status = getattr(getattr(exc, "resp", None), "status", None)
+            if isinstance(exc, HttpError) and http_status not in {408, 500, 502, 503, 504}:
+                raise
+            if disconnected_at is None:
+                disconnected_at = time.monotonic()
+            elapsed = time.monotonic() - disconnected_at
+            if elapsed >= 1800:
+                raise RuntimeError("YouTube connection timed out. Check your channel before retrying.") from exc
+            if on_progress:
+                message = "Connection error, check your network." if elapsed >= 120 else (
+                    "This is taking longer than usual." if elapsed >= 60 else "Reconnecting to YouTube."
+                )
+                on_progress("reconnecting", message, 35)
+            # Reuse this resumable request, not a new videos.insert request.
+            time.sleep(5)
     video_id = response["id"]
     return {
         "postId": video_id,

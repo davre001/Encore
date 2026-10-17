@@ -21,9 +21,10 @@ import type {
 
 const API = "/api";
 const CONFIGURED_BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "");
-/** Direct backend origin for long-running publish and analytics requests. */
+/** Direct backend origin for analytics and uploads that bypass the proxy hop. */
 const BACKEND =
   CONFIGURED_BACKEND || "http://127.0.0.1:5000";
+const UPLOAD_API = CONFIGURED_BACKEND?.startsWith("https://") ? `${BACKEND}/api` : API;
 
 const TOKEN_KEY = "encore.accessToken";
 
@@ -75,11 +76,55 @@ async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     const detail = apiErrorDetail(text);
-    throw new Error(
-      `API Error ${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`
-    );
+    const error = new Error(`API Error ${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`);
+    Object.assign(error, { status: res.status });
+    throw error;
   }
   return res.json();
+}
+
+export type RecoveryOptions = {
+  onNotice?: (message: string | null) => void;
+  shouldStop?: () => boolean;
+};
+
+/** Only use for reads or operations the server can safely deduplicate. */
+export async function withNetworkRecovery<T>(
+  operation: () => Promise<T>, options: RecoveryOptions = {},
+): Promise<T> {
+  const started = Date.now();
+  let failedAt: number | null = null;
+  let lastNotice: string | null = null;
+  const monitor = window.setInterval(() => {
+    const elapsed = Date.now() - (failedAt ?? started);
+    const notice = failedAt !== null && elapsed >= 120_000
+      ? "Connection error, check your network."
+      : elapsed >= 60_000 ? "This is taking longer than usual." : null;
+    if (notice !== lastNotice) {
+      lastNotice = notice;
+      options.onNotice?.(notice);
+    }
+  }, 1000);
+  try {
+    for (;;) {
+      if (options.shouldStop?.()) throw new DOMException("Stopped by user.", "AbortError");
+      try {
+        const result = await operation();
+        return result;
+      } catch (error) {
+        const status = (error as { status?: number })?.status;
+        const retryable = error instanceof TypeError ||
+          (error instanceof Error && /timed out|timeout|networkerror|failed to fetch/i.test(error.message)) ||
+          status === 502 || status === 503 || status === 504 || status === 408;
+        if (!retryable) throw error;
+        if (failedAt === null) failedAt = Date.now();
+        await new Promise((resolve) => window.setTimeout(resolve, 3000));
+      }
+    }
+  } finally {
+    window.clearInterval(monitor);
+    if (lastNotice !== null) options.onNotice?.(null);
+  }
 }
 
 async function fetchWithTimeout(
@@ -105,25 +150,31 @@ async function fetchWithTimeout(
 export async function uploadVideo(
   file: File,
   onProgress?: (progress: number, message: string) => void,
+  recovery: RecoveryOptions = {},
 ): Promise<Video> {
   const filename = file.name || "take.mp4";
-  const chunkSize = 4 * 1024 * 1024;
+  const connection = (navigator as Navigator & { connection?: { downlink?: number } }).connection;
+  const slowConnection = (connection?.downlink ?? 10) < 2;
+  const chunkSize = (slowConnection ? 512 : (connection?.downlink ?? 3) >= 5 ? 4096 : 1024) * 1024;
   const qs = new URLSearchParams({ filename });
   const startQs = new URLSearchParams({ filename, size: String(file.size), chunk_size: String(chunkSize) });
   onProgress?.(9, "Starting upload.");
-  const start = await fetchWithTimeout(
-    `${API}/videos/chunked/start?${startQs.toString()}`,
+  const { uploadId, parallelChunks } = await withNetworkRecovery(async () => {
+    const start = await fetchWithTimeout(
+    `${UPLOAD_API}/videos/chunked/start?${startQs.toString()}`,
     {
       method: "POST",
       headers: userHeaders(),
     },
     30_000,
-  );
-  const { uploadId, parallelChunks } = await handleResponse<{ uploadId: string; parallelChunks?: boolean }>(start);
+    );
+    return handleResponse<{ uploadId: string; parallelChunks?: boolean }>(start);
+  }, recovery);
 
   let nextIndex = 0;
   let uploaded = 0;
   let failed = false;
+  const chunkNotices = new Map<number, string>();
   const chunkCount = Math.ceil(file.size / chunkSize);
   async function sendChunk(index: number) {
     const offset = index * chunkSize;
@@ -131,7 +182,7 @@ export async function uploadVideo(
     for (let attempt = 0; ; attempt += 1) {
       try {
         const res = await fetchWithTimeout(
-          `${API}/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
+          `${UPLOAD_API}/videos/chunked/${encodeURIComponent(uploadId)}/chunk?index=${index}`,
           {
             method: "POST",
             headers: {
@@ -169,7 +220,16 @@ export async function uploadVideo(
     while (!failed && nextIndex < chunkCount) {
       const index = nextIndex++;
       try {
-        await sendChunk(index);
+        if (parallelChunks) await withNetworkRecovery(() => sendChunk(index), {
+          ...recovery,
+          onNotice: (notice) => {
+            if (notice) chunkNotices.set(index, notice);
+            else chunkNotices.delete(index);
+            const notices = [...chunkNotices.values()];
+            recovery.onNotice?.(notices.find((message) => message.startsWith("Connection error")) ?? notices[0] ?? null);
+          },
+        });
+        else await sendChunk(index);
       } catch (error) {
         failed = true;
         throw error;
@@ -177,30 +237,32 @@ export async function uploadVideo(
     }
   }
   const results = await Promise.allSettled(
-    Array.from({ length: Math.min(parallelChunks ? 3 : 1, chunkCount) }, () => worker()),
+    Array.from({ length: Math.min(parallelChunks ? (slowConnection ? 2 : 3) : 1, chunkCount) }, () => worker()),
   );
   for (const result of results) {
     if (result.status === "rejected") throw result.reason;
   }
 
   onProgress?.(19, "Finishing upload.");
-  const finish = await fetchWithTimeout(
-    `${API}/videos/chunked/${encodeURIComponent(uploadId)}/finish?${qs.toString()}`,
-    {
-      method: "POST",
-      headers: userHeaders(),
-    },
-    120_000,
-  );
-  return handleResponse<Video>(finish);
+  return withNetworkRecovery(async () => {
+    const finish = await fetchWithTimeout(
+      `${UPLOAD_API}/videos/chunked/${encodeURIComponent(uploadId)}/finish?${qs.toString()}`,
+      { method: "POST", headers: userHeaders() },
+      120_000,
+    );
+    return handleResponse<Video>(finish);
+  }, recovery);
 }
 
 /** Retrieve video metadata by id. */
-export async function getVideo(videoId: string): Promise<Video> {
-  const res = await fetch(`${API}/videos/${encodeURIComponent(videoId)}`, {
-    headers: userHeaders(),
-  });
-  return handleResponse<Video>(res);
+export async function getVideo(videoId: string, recovery?: RecoveryOptions): Promise<Video> {
+  const read = async () => {
+    const res = await fetchWithTimeout(`${API}/videos/${encodeURIComponent(videoId)}`, {
+      headers: userHeaders(),
+    }, 30_000);
+    return handleResponse<Video>(res);
+  };
+  return recovery ? withNetworkRecovery(read, recovery) : read();
 }
 
 /** Same-origin URL for the original take file — used to resume playback. */
@@ -214,19 +276,25 @@ export function clipFileUrl(clipId: string): string {
 }
 
 /** List proposed moments for a video. */
-export async function listMoments(videoId: string): Promise<Moment[]> {
-  const res = await fetch(`${API}/moments/${encodeURIComponent(videoId)}`, {
-    headers: userHeaders(),
-  });
-  return handleResponse<Moment[]>(res);
+export async function listMoments(videoId: string, recovery?: RecoveryOptions): Promise<Moment[]> {
+  const read = async () => {
+    const res = await fetchWithTimeout(`${API}/moments/${encodeURIComponent(videoId)}`, {
+      headers: userHeaders(),
+    }, 30_000);
+    return handleResponse<Moment[]>(res);
+  };
+  return recovery ? withNetworkRecovery(read, recovery) : read();
 }
 
 /** Current AI analysis stage for a video's moment detection job. */
-export async function getAnalysisStatus(videoId: string): Promise<AnalysisStatus> {
-  const res = await fetch(`${API}/videos/${encodeURIComponent(videoId)}/analysis`, {
-    headers: userHeaders(),
-  });
-  return handleResponse<AnalysisStatus>(res);
+export async function getAnalysisStatus(videoId: string, recovery?: RecoveryOptions): Promise<AnalysisStatus> {
+  const read = async () => {
+    const res = await fetchWithTimeout(`${API}/videos/${encodeURIComponent(videoId)}/analysis`, {
+      headers: userHeaders(),
+    }, 30_000);
+    return handleResponse<AnalysisStatus>(res);
+  };
+  return recovery ? withNetworkRecovery(read, recovery) : read();
 }
 
 /** Persisted creator-level AI permission mode. */
@@ -277,11 +345,14 @@ export async function decideMoment(
 }
 
 /** List generated clips for a video. */
-export async function listClips(videoId: string): Promise<Clip[]> {
-  const res = await fetch(`${API}/clips/${encodeURIComponent(videoId)}`, {
-    headers: userHeaders(),
-  });
-  return handleResponse<Clip[]>(res);
+export async function listClips(videoId: string, recovery?: RecoveryOptions): Promise<Clip[]> {
+  const read = async () => {
+    const res = await fetchWithTimeout(`${API}/clips/${encodeURIComponent(videoId)}`, {
+      headers: userHeaders(),
+    }, 30_000);
+    return handleResponse<Clip[]>(res);
+  };
+  return recovery ? withNetworkRecovery(read, recovery) : read();
 }
 
 /** Regenerate one cut's title, description, hashtags, and tags. */
@@ -395,20 +466,62 @@ export async function getCaptionJob(clipId: string): Promise<CaptionJob> {
 
 /** Publish a clip to YouTube. */
 export async function postClip(
-  clipId: string
+  clipId: string,
+  recovery: RecoveryOptions = {},
+  onProgress?: (job: { message: string; progress?: number }) => void,
 ): Promise<{ postId: string; postUrl: string }> {
-  const res = await fetch(`${BACKEND}/api/posts/${encodeURIComponent(clipId)}`, {
-    method: "POST",
-    headers: userHeaders(),
-  });
-  return handleResponse<{ postId: string; postUrl: string }>(res);
+  type PublishJob = { done: boolean; stage: string; message: string; progress?: number; postId?: string; postUrl?: string };
+  const url = `${API}/posts/${encodeURIComponent(clipId)}/job`;
+  const read = async (method: string) => handleResponse<PublishJob>(await fetchWithTimeout(url, {
+    method, headers: userHeaders(),
+  }, 30_000));
+  let job = await withNetworkRecovery(() => read("POST"), recovery);
+  const started = Date.now();
+  while (!job.done) {
+    onProgress?.(job);
+    if (job.stage === "reconnecting") recovery.onNotice?.(job.message);
+    else if (Date.now() - started >= 60_000) recovery.onNotice?.("This is taking longer than usual.");
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    job = await withNetworkRecovery(() => read("GET"), recovery);
+  }
+  recovery.onNotice?.(null);
+  if (job.stage !== "complete" || !job.postId || !job.postUrl) throw new Error(job.message || "YouTube publishing failed.");
+  return { postId: job.postId, postUrl: job.postUrl };
+}
+
+export async function waitForMedia(url: string, recovery: RecoveryOptions): Promise<void> {
+  return withNetworkRecovery(async () => {
+    const response = await fetchWithTimeout(url, { headers: { Range: "bytes=0-0" } }, 30_000);
+    if (!response.ok) {
+      if (response.status === 404 || response.status === 410) throw new Error("The source video is no longer available. Upload it again.");
+      await handleResponse(response);
+    }
+    await response.body?.cancel();
+  }, recovery);
+}
+
+export async function stopPublishJob(clipId: string, recovery: RecoveryOptions) {
+  type Job = {
+    stage: string; done: boolean; postId?: string; postUrl?: string;
+  };
+  const url = `${API}/posts/${encodeURIComponent(clipId)}/job`;
+  let job = await withNetworkRecovery(async () => handleResponse<Job>(await fetchWithTimeout(`${url}/cancel`, {
+    method: "POST", headers: userHeaders(),
+  }, 30_000)), recovery);
+  while (!job.done) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    job = await withNetworkRecovery(async () => handleResponse<Job>(await fetchWithTimeout(url, {
+      headers: userHeaders(),
+    }, 30_000)), recovery);
+  }
+  return job;
 }
 
 /** Check view count and verdict for a published post. */
 export async function checkPost(postId: string): Promise<PostCheck> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${BACKEND}/api/posts/${encodeURIComponent(postId)}/check`,
-    { headers: userHeaders() }
+    { headers: userHeaders() }, 30_000,
   );
   return handleResponse<PostCheck>(res);
 }
@@ -629,11 +742,14 @@ export async function listProjects(): Promise<ProjectState[]> {
   return handleResponse<ProjectState[]>(res);
 }
 
-export async function getProject(projectId: string): Promise<ProjectState> {
-  const res = await fetch(`${API}/projects/${encodeURIComponent(projectId)}`, {
-    headers: userHeaders(),
-  });
-  return handleResponse<ProjectState>(res);
+export async function getProject(projectId: string, recovery?: RecoveryOptions): Promise<ProjectState> {
+  const read = async () => {
+    const res = await fetchWithTimeout(`${API}/projects/${encodeURIComponent(projectId)}`, {
+      headers: userHeaders(),
+    }, 30_000);
+    return handleResponse<ProjectState>(res);
+  };
+  return recovery ? withNetworkRecovery(read, recovery) : read();
 }
 
 export async function deleteProject(

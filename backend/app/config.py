@@ -41,8 +41,8 @@ YOUTUBE_REDIRECT_URI = os.getenv(
 ).strip()
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL_TEXT = os.getenv("GEMINI_MODEL_TEXT", "gemini-3.5-flash-lite").strip()
-GEMINI_MODEL_VIDEO = os.getenv("GEMINI_MODEL_VIDEO", "gemini-3.5-flash-lite").strip()
+GEMINI_MODEL_TEXT = os.getenv("GEMINI_MODEL_TEXT", "gemini-3.8-flash").strip()
+GEMINI_MODEL_VIDEO = os.getenv("GEMINI_MODEL_VIDEO", "gemini-3.8-flash").strip()
 
 # --- Auth -------------------------------------------------------------------
 # Development gets a stable-enough secret from the Minds key when present, but

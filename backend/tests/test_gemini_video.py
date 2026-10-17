@@ -130,7 +130,7 @@ class VideoAnalysisTests(unittest.TestCase):
 
     def test_exhausted_review_deadline_finishes_with_timeout(self):
         with (
-            patch.object(gemini.time, "monotonic", side_effect=[0.0, 181.0]),
+            patch.object(gemini.time, "monotonic", side_effect=[0.0, 361.0]),
             patch.object(gemini.httpx, "stream") as stream,
         ):
             self.assertIsNone(self.generate())

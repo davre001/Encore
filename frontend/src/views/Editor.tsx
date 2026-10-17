@@ -13,6 +13,7 @@ import { Pencil, Plus } from "lucide-react";
 import EditorActions, {
   type ExportTarget,
 } from "@/components/editor/EditorActions";
+import { TaskProgressTracker } from "@/components/ui/task-progress";
 import Timeline from "@/components/editor/Timeline";
 import ToolPanel from "@/components/editor/ToolPanel";
 import ToolRail, { type ToolId } from "@/components/editor/ToolRail";
@@ -552,6 +553,7 @@ export default function Editor() {
   // publishing). Analysis phases come from analysisStatus instead, and every
   // action clears this in a finally so a finished bar never lingers on screen.
   const [actionProgress, setActionProgress] = useState<{ label: string; percent: number } | null>(null);
+  const taskFailureRef = useRef<string | null>(null);
   const [actionStopped, setActionStopped] = useState(false);
   const stoppedActionRef = useRef(false);
   const rejoinAnalysisRef = useRef<string | null>(null);
@@ -601,6 +603,8 @@ export default function Editor() {
   // Playback: a real object URL off the picked file, so the monitor actually
   // plays the take and the playhead tracks real time.
   const mediaRef = useRef<HTMLVideoElement>(null);
+  const mediaRecoveryRef = useRef<string | null>(null);
+  const mediaRecoveryAttemptsRef = useRef({ url: "", count: 0 });
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [mediaDuration, setMediaDuration] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -645,6 +649,8 @@ export default function Editor() {
   const pendingManualConfirm = useRef<string | null>(null);
   const pendingSelectedPublish = useRef<string | null>(null);
   const publishingClipIds = useRef<Set<string>>(new Set());
+  const activePublishRef = useRef<{ localId: string; serverId: string } | null>(null);
+  const sourceUnavailableRef = useRef(false);
   const publishedClipIds = useRef<Set<string>>(new Set());
   const publishedMessageKeys = useRef<Set<string>>(new Set());
 
@@ -689,7 +695,7 @@ export default function Editor() {
     let mounted = true;
     const token = ++projectLoadToken.current;
     api
-      .getProject(qProject)
+      .getProject(qProject, { onNotice: setStatusText, shouldStop: () => !mounted })
       .then((proj) => {
         if (!mounted || !proj || token !== projectLoadToken.current) return;
         setProjectId(proj.id);
@@ -735,15 +741,15 @@ export default function Editor() {
           // directory may be replaced during a deployment. Verify the source
           // record before enabling playback or reconnecting an analysis poll.
           void api
-            .getVideo(proj.videoId)
+            .getVideo(proj.videoId, { onNotice: setStatusText, shouldStop: () => !mounted })
             .then(async (restoredVideo) => {
               if (!mounted) return;
               setVideo(restoredVideo);
               setMediaUrl(api.videoFileUrl(proj.videoId!));
               const [foundMoments, foundClips, status] = await Promise.all([
-                api.listMoments(proj.videoId!).catch(() => []),
-                api.listClips(proj.videoId!).catch(() => []),
-                api.getAnalysisStatus(proj.videoId!).catch(() => null),
+                api.listMoments(proj.videoId!, { onNotice: setStatusText, shouldStop: () => !mounted }).catch(() => []),
+                api.listClips(proj.videoId!, { onNotice: setStatusText, shouldStop: () => !mounted }).catch(() => proj.clips ?? []),
+                api.getAnalysisStatus(proj.videoId!, { onNotice: setStatusText, shouldStop: () => !mounted }).catch(() => null),
               ]);
               if (!mounted) return;
               setMoments(foundMoments);
@@ -752,8 +758,10 @@ export default function Editor() {
               setSelectedClipId(foundClips[0]?.id ?? null);
               if (status) setAnalysisStatus(status);
             })
-            .catch(() => {
+            .catch((error) => {
               if (!mounted) return;
+              sourceUnavailableRef.current = true;
+              showStatus(taskFailureRef.current = errorText("Couldn't resume", error));
               setVideo(null);
               setMediaUrl(null);
               setAnalysisStatus(null);
@@ -885,7 +893,7 @@ export default function Editor() {
   }
   // Auto-save project whenever take segments, clips, or effect options change
   useEffect(() => {
-    if (isInitialLoad.current) return;
+    if (isInitialLoad.current || sourceUnavailableRef.current) return;
     // Don't auto-save an empty, untouched canvas before any upload or clips exist
     if (!video && clips.length === 0 && takeSegments.length === 0 && !mediaUrl) {
       return;
@@ -957,7 +965,7 @@ export default function Editor() {
   // Persist the playhead on pause so Continue restores the last watched spot.
   // Do not key the main auto-save on `time` — that would write on every frame.
   useEffect(() => {
-    if (isInitialLoad.current || playing || !projectId) return;
+    if (isInitialLoad.current || sourceUnavailableRef.current || playing || !projectId) return;
     const at = time;
     const timer = window.setTimeout(() => {
       void api.updateProject(projectId, { playhead: at }).catch(() => {});
@@ -1079,6 +1087,7 @@ export default function Editor() {
   /* ---- Take ---- */
 
   async function handleUpload(file: File) {
+    sourceUnavailableRef.current = false;
     const importedName = stem(file.name) || "Untitled";
     // The saved project had not finished opening, so this import is a new
     // project. Applying the late load afterwards is what put the old take on
@@ -1095,6 +1104,7 @@ export default function Editor() {
       }
     }
     clearStoppedAction();
+    taskFailureRef.current = null;
     setBusy(true);
     // Do not let refresh-resume polling follow the previous take while this
     // file is being uploaded. Render may no longer have that local record.
@@ -1151,7 +1161,7 @@ export default function Editor() {
         videoId: "pending", stage: "queued", message, progress,
         updatedAt: Date.now(), done: false,
       });
-    }).then(
+    }, { onNotice: setStatusText, shouldStop: () => stoppedActionRef.current }).then(
       (value) => ({ value, error: null }),
       (error: unknown) => ({ value: null, error }),
     );
@@ -1220,40 +1230,8 @@ export default function Editor() {
       // 2. Poll for moments (propose_moments runs in a FastAPI background task).
       // Real Whisper on a genuinely long take can run well past a minute, so
       // give it room before declaring the tape momentless.
-      let foundMoments: Moment[] = [];
-      let latestStatus: AnalysisStatus | null = null;
-      const startTime = Date.now();
-      const timeoutMs = 420_000;
-      while (Date.now() - startTime < timeoutMs) {
-        await sleep(1000);
-        if (stoppedActionRef.current) return;
-        const status = await api.getAnalysisStatus(nextVideo.id).catch(() => null);
-        if (status) {
-          latestStatus = status;
-          setAnalysisStatus(status);
-        }
-        foundMoments = await api.listMoments(nextVideo.id);
-        if (foundMoments && foundMoments.length > 0) {
-          latestStatus = completedAnalysisStatus(nextVideo.id, foundMoments.length);
-          setAnalysisStatus(latestStatus);
-          break;
-        }
-        if (status?.done) {
-          break;
-        }
-      }
-      if (foundMoments.length === 0 && latestStatus && !latestStatus.done) {
-        latestStatus = {
-          ...latestStatus,
-          stage: "error",
-          message:
-            "Timeout error",
-          errorType: "timeout",
-          updatedAt: Date.now(),
-          done: true,
-        };
-        setAnalysisStatus(latestStatus);
-      }
+      const { foundMoments, latestStatus } = await pollMomentAnalysis(nextVideo.id);
+      if (stoppedActionRef.current) return;
 
       setMoments(foundMoments);
       setBusy(false);
@@ -1375,6 +1353,7 @@ export default function Editor() {
     const momentsToSkip = rankedPending.slice(1);
     const vidId = video?.id || nextMoments[0]?.videoId;
     if (!bestMoment && !vidId) return;
+    taskFailureRef.current = null;
     setBusy(true);
 
     try {
@@ -1432,6 +1411,7 @@ export default function Editor() {
     }
   }
   function handleReset() {
+    sourceUnavailableRef.current = false;
     setVideo(null);
     setAnalysisStatus(null);
     setMoments([]);
@@ -1536,6 +1516,7 @@ export default function Editor() {
     // Asking for captions is starting work, so a stop from an earlier action is
     // no longer in force; from here the stop button cancels this run instead.
     clearStoppedAction();
+    taskFailureRef.current = null;
     setActionProgress({ label: "Queuing the caption run.", percent: 5 });
 
     let adopted: CaptionTrack | null = null;
@@ -1854,6 +1835,7 @@ export default function Editor() {
     if (!video?.id || busy) return;
     clearStoppedAction();
     setTool("moments");
+    taskFailureRef.current = null;
     setBusy(true);
     setRegeneratingMoments(true);
     setMoments([]);
@@ -2579,6 +2561,7 @@ export default function Editor() {
     if (clip.posted || publishingClipIds.current.has(publishKey) || publishedClipIds.current.has(publishKey)) {
       return false;
     }
+    taskFailureRef.current = null;
     publishingClipIds.current.add(publishKey);
     let serverPublishKey: string | null = null;
     setStatusText(null);
@@ -2587,12 +2570,16 @@ export default function Editor() {
       const ready = await ensureServerClip(clip);
       if (publishedClipIds.current.has(ready.id)) return false;
       serverPublishKey = ready.id;
+      activePublishRef.current = { localId: clip.id, serverId: ready.id };
       publishingClipIds.current.add(ready.id);
       setActionProgress({
         label: `Publishing "${clip.title}" to YouTube`,
-        percent: 74,
+        percent: 35,
       });
-      const { postId, postUrl } = await api.postClip(ready.id);
+      const { postId, postUrl } = await api.postClip(ready.id,
+        { onNotice: setStatusText, shouldStop: () => stoppedActionRef.current },
+        (job) => setActionProgress((previous) => ({ label: job.message, percent: Math.max(previous?.percent ?? 0, job.progress ?? 35) })),
+      );
       publishedClipIds.current.add(clip.id);
       publishedClipIds.current.add(ready.id);
       setActionProgress({ label: `Published "${clip.title}"`, percent: 100 });
@@ -2647,7 +2634,8 @@ export default function Editor() {
       // seconds after it went up, and feeding that flop to the playbook. The
       // backend now refuses to grade a fresh post; this stops asking it to and
       // reports the wait instead.
-      const check = await api.checkPost(postId);
+      const check = await api.checkPost(postId).catch(() => null);
+      if (!check) return true; // Analytics failure cannot turn a verified upload into a failed publish.
       setChecks((prev) => [check, ...prev]);
       setProjectViews(check.views);
       // A narrowed local rather than a boolean: it is what keeps "pending" out
@@ -2686,11 +2674,12 @@ export default function Editor() {
       await sleep(1400);
       return true;
     } catch (err: any) {
-      showStatus(errorText("Publish failed", err));
+      showStatus(taskFailureRef.current = errorText("Publish failed", err));
       return false;
     } finally {
       publishingClipIds.current.delete(clip.id);
       if (serverPublishKey) publishingClipIds.current.delete(serverPublishKey);
+      if (activePublishRef.current?.localId === clip.id) activePublishRef.current = null;
       setActionProgress(null);
     }
   }
@@ -2704,7 +2693,7 @@ export default function Editor() {
       try {
         await downloadRenderedClip(clip);
       } catch (err: any) {
-        showStatus(errorText("Export failed", err));
+        showStatus(taskFailureRef.current = errorText("Export failed", err));
       }
       setExporting(null);
       return;
@@ -2719,11 +2708,25 @@ export default function Editor() {
   }
 
   async function stopCurrentAction() {
+    const activePublish = activePublishRef.current;
     stoppedActionRef.current = true;
     setActionStopped(true);
     setBusy(false);
     setRegeneratingMoments(false);
     setActionProgress(null);
+    if (activePublish) {
+      showStatus("Waiting to stop publishing.");
+      void api.stopPublishJob(activePublish.serverId, { onNotice: setStatusText }).then((job) => {
+        if (job.stage === "complete" && job.postId && job.postUrl) {
+          setClips((previous) => previous.map((clip) => clip.id === activePublish.localId || clip.id === activePublish.serverId
+            ? { ...clip, posted: true, postId: job.postId, postUrl: job.postUrl } : clip));
+          setProjectStatus("posted");
+          setProjectPostId(job.postId);
+          setProjectPostUrl(job.postUrl);
+          showStatus("This cut finished publishing before it could be stopped.");
+        } else showStatus("Publishing stopped.");
+      }).catch((error) => showStatus(taskFailureRef.current = errorText("Couldn't stop publishing", error)));
+    }
     if (analysisStatus && !analysisStatus.done) {
       setAnalysisStatus({
         ...analysisStatus,
@@ -2749,32 +2752,30 @@ export default function Editor() {
 
   /* ---- Mind ---- */
 
-  async function pollMomentAnalysis(videoId: string) {
+  async function pollMomentAnalysis(videoId: string, cancelled = () => false) {
     let foundMoments: Moment[] = [];
     let latestStatus: AnalysisStatus | null = null;
     const startTime = Date.now();
-    const timeoutMs = 420_000;
+    const shouldStop = () => stoppedActionRef.current || cancelled();
+    const recovery = { onNotice: (notice: string | null) => { if (!cancelled()) setStatusText(notice); }, shouldStop };
 
-    while (Date.now() - startTime < timeoutMs) {
+    while (!shouldStop()) {
       await sleep(1000);
-      const status = await api.getAnalysisStatus(videoId).catch(() => null);
+      const status = await api.getAnalysisStatus(videoId, recovery);
       if (status) {
         latestStatus = status;
         setAnalysisStatus(status);
       }
-      foundMoments = await api.listMoments(videoId);
+      foundMoments = await api.listMoments(videoId, recovery);
       if (foundMoments && foundMoments.length > 0) {
         latestStatus = completedAnalysisStatus(videoId, foundMoments.length);
         setAnalysisStatus(latestStatus);
         break;
       }
       if (status?.done) break;
+      if (Date.now() - startTime >= 60_000) setStatusText("This is taking longer than usual.");
     }
-
-    if (foundMoments.length === 0 && latestStatus && !latestStatus.done) {
-      latestStatus = timedOutAnalysisStatus(videoId);
-      setAnalysisStatus(latestStatus);
-    }
+    if (latestStatus?.done) setStatusText(null);
 
     return { foundMoments, latestStatus };
   }
@@ -2788,7 +2789,7 @@ export default function Editor() {
     rejoinAnalysisRef.current = video.id;
     let cancelled = false;
     void (async () => {
-      const { foundMoments, latestStatus } = await pollMomentAnalysis(video.id);
+      const { foundMoments, latestStatus } = await pollMomentAnalysis(video.id, () => cancelled);
       if (cancelled || stoppedActionRef.current) return;
       if (foundMoments.length > 0) {
         setMoments(foundMoments);
@@ -2799,7 +2800,11 @@ export default function Editor() {
         setAnalysisStatus(latestStatus);
       }
       rejoinAnalysisRef.current = null;
-    })();
+    })().catch((error: unknown) => {
+      if (cancelled || stoppedActionRef.current) return;
+      rejoinAnalysisRef.current = null;
+      setStatusText(errorText("Couldn't resume", error));
+    });
     return () => {
       cancelled = true;
       rejoinAnalysisRef.current = null;
@@ -2816,6 +2821,7 @@ export default function Editor() {
 
     clearStoppedAction();
     setTool("mind");
+    taskFailureRef.current = null;
     setBusy(true);
     setRegeneratingMoments(true);
     setMoments([]);
@@ -2923,6 +2929,7 @@ export default function Editor() {
 
     clearStoppedAction();
     setTool("cuts");
+    taskFailureRef.current = null;
     setBusy(true);
     try {
       let workingMoments = moments;
@@ -2973,7 +2980,7 @@ export default function Editor() {
             const updated = await api.decideMoment(moment.id, "accept");
             accepted.push(updated);
           } catch (err: any) {
-            showStatus(errorText(`Could not create a cut for "${moment.label}"`, err));
+            showStatus(taskFailureRef.current = errorText(`Could not create a cut for "${moment.label}"`, err));
             continue;
           }
           if (video?.id) {
@@ -3043,7 +3050,7 @@ export default function Editor() {
         );
       }
     } catch (err: any) {
-      showStatus(errorText("AI action failed", err));
+      showStatus(taskFailureRef.current = errorText("AI action failed", err));
     } finally {
       setBusy(false);
       setActionProgress(null); // never leave a finished bar on screen
@@ -3067,6 +3074,7 @@ export default function Editor() {
       return;
     }
 
+    taskFailureRef.current = null;
     setBusy(true);
     try {
       const title = `Cut ${formatTime(start)}-${formatTime(end)}`;
@@ -3085,7 +3093,7 @@ export default function Editor() {
       setActionProgress({ label: "Cut created", percent: 100 });
       pushMind(`Created "${created.title}" from ${formatTime(start)} to ${formatTime(end)}.`);
     } catch (err: any) {
-      showStatus(errorText("Could not create that cut", err));
+      showStatus(taskFailureRef.current = errorText("Could not create that cut", err));
     } finally {
       setBusy(false);
       // Clear the bar when the work ends. Nothing cleared it before, so a stale
@@ -3112,6 +3120,7 @@ export default function Editor() {
       pushMind(`“${clip.title}” is already on YouTube. I won't post it again.`);
       return;
     }
+    taskFailureRef.current = null;
     setBusy(true);
     setTool("cuts");
     try {
@@ -3145,6 +3154,7 @@ export default function Editor() {
       return;
     }
     pushMind(`Adding captions to "${clip.title}" - the cut you selected.`);
+    taskFailureRef.current = null;
     setBusy(true);
     setTool("caption");
     try {
@@ -3194,6 +3204,7 @@ export default function Editor() {
     // Deliberately not chatBusy: that flag exists to put "Thinking..." above the
     // composer, and nothing here is thinking — the progress loader below is the
     // honest report, and chatBusy does not gate the input anyway.
+    taskFailureRef.current = null;
     setBusy(true);
     try {
       setActionProgress({ label: "Checking where the last run stopped", percent: 8 });
@@ -3256,7 +3267,7 @@ export default function Editor() {
     } catch (err: any) {
       // The state read is idempotent, so saying "resume" again simply carries on
       // from wherever this attempt got to.
-      showStatus(errorText("Couldn't resume", err));
+      showStatus(taskFailureRef.current = errorText("Couldn't resume", err));
     } finally {
       setBusy(false);
       setActionProgress(null); // never leave a finished bar on screen
@@ -3438,7 +3449,7 @@ export default function Editor() {
       const reply = await api.sendMessage(targetId, text);
       setMessages((prev) => [...prev, reply]);
     } catch (err: any) {
-      showStatus(errorText("Failed to reach Encore Mind", err));
+      showStatus(taskFailureRef.current = errorText("Failed to reach Encore Mind", err));
     } finally {
       setChatBusy(false);
     }
@@ -3757,6 +3768,20 @@ export default function Editor() {
           cuts: clips.length,
         }}
         onTool={setTool}
+        progress={(
+          <TaskProgressTracker
+            active={!!(actionProgress || (analysisStatus && !analysisStatus.done) || busy || regeneratingMoments)}
+            stopped={actionStopped}
+            analysisRunning={!!analysisStatus && !analysisStatus.done}
+            analysisError={analysisStatus?.stage === "error" ? analysisStatus.message : null}
+            error={taskFailureRef.current}
+            message={analysisStatus && !analysisStatus.done
+              ? analysisStatus.message || analysisStageLabel(analysisStatus.stage)
+              : actionProgress?.label || statusText || "Preparing your task?"}
+            percent={analysisStatus && !analysisStatus.done ? analysisStatus.progress : actionProgress?.percent}
+            onStop={() => void stopCurrentAction()}
+          />
+        )}
       />
 
       <ToolPanel
@@ -3864,9 +3889,37 @@ export default function Editor() {
                 onPlay={() => setPlaying(true)}
                 onPause={() => setPlaying(false)}
                 onError={() => {
-                  pushMind(
-                    "Couldn't load the saved take. Try again!",
-                  );
+                  const element = mediaRef.current;
+                  if (!mediaUrl || !element || mediaRecoveryRef.current === mediaUrl) return;
+                  if (mediaRecoveryAttemptsRef.current.url !== mediaUrl) {
+                    mediaRecoveryAttemptsRef.current = { url: mediaUrl, count: 0 };
+                  }
+                  mediaRecoveryAttemptsRef.current.count += 1;
+                  if (element.error?.code === 4 && mediaRecoveryAttemptsRef.current.count > 2) {
+                    showStatus("This video format cannot be played in your browser.");
+                    return;
+                  }
+                  if (element.error?.code === 3) {
+                    showStatus("This video format cannot be played in your browser.");
+                    return;
+                  }
+                  const failedUrl = mediaUrl;
+                  const playhead = element.currentTime;
+                  mediaRecoveryRef.current = failedUrl;
+                  void api.waitForMedia(failedUrl, {
+                    onNotice: setStatusText,
+                    shouldStop: () => mediaRef.current !== element || element.getAttribute("src") !== failedUrl,
+                  }).then(() => {
+                    element.addEventListener("loadedmetadata", () => {
+                      if (Number.isFinite(playhead)) element.currentTime = playhead;
+                    }, { once: true });
+                    element.load();
+                  }).catch((error) => {
+                    const message = errorText("Playback failed", error);
+                    if (message.includes("source video")) sourceUnavailableRef.current = true;
+                    showStatus(message);
+                  })
+                    .finally(() => { mediaRecoveryRef.current = null; });
                 }}
               />
             ) : (

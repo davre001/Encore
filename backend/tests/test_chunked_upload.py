@@ -2,6 +2,7 @@ import asyncio
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -17,7 +18,9 @@ class ChunkedUploadTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.directory.cleanup)
         self.patches = [
             patch.object(videos.storage, "UPLOAD_DIR", self.directory.name),
+            patch.object(videos.storage, "DATA_DIR", self.directory.name),
             patch.object(videos.storage, "ensure_dirs"),
+            patch.object(videos.shutil, "disk_usage", return_value=SimpleNamespace(free=10 * 1024**3)),
             patch.object(videos, "_save_video_record", side_effect=self.capture),
         ]
         for item in self.patches:
@@ -54,7 +57,10 @@ class ChunkedUploadTests(unittest.IsolatedAsyncioTestCase):
         result = await self.client.post(base + "/finish", params={"filename": "test.mp4"})
         self.assertEqual(result.status_code, 200, result.text)
         self.assertEqual(self.saved, b"abcdefghij")
-        self.assertEqual(len(os.listdir(self.directory.name)), 1)
+        self.assertEqual(len([path for path in os.listdir(self.directory.name) if path.endswith(".mp4")]), 1)
+        repeated = await self.client.post(base + "/finish", params={"filename": "test.mp4"})
+        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(repeated.json(), result.json())
 
     async def test_incomplete_upload_cannot_finish(self):
         base = await self.start()

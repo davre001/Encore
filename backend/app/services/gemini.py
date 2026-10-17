@@ -267,7 +267,7 @@ def _generate_json_from_video_file(
     file_record: dict,
     prompt: str,
     schema: dict,
-    timeout_s: float = 60.0,
+    timeout_s: float = 120.0,
     processing_mode: str = "AGENTIC",
     on_progress: Optional[Callable[[str, int], None]] = None,
 ) -> Optional[dict]:
@@ -300,7 +300,7 @@ def _generate_json_from_video_file(
         },
     }
     last_error: Exception | None = None
-    deadline = time.monotonic() + 180.0
+    deadline = time.monotonic() + 360.0
     for attempt in range(3):
         try:
             remaining = deadline - time.monotonic()

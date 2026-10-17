@@ -6,6 +6,7 @@ deterministic fallback (FALLBACK_DURATION for probing, the source path for
 rendering) instead of raising — the server must run on a box with no ffmpeg.
 """
 
+import hashlib
 import os
 import re
 import shutil
@@ -187,29 +188,39 @@ def analysis_proxy(src_path: str) -> str:
     if not src_path or not os.path.exists(src_path) or not _has("ffmpeg"):
         return src_path
     try:
-        if os.path.getsize(src_path) <= 45 * 1024 * 1024:
+        source_stat = os.stat(src_path)
+        if source_stat.st_size <= 12 * 1024 * 1024:
             return src_path
     except OSError:
         return src_path
 
-    out_path = os.path.join(UPLOAD_DIR, f"analysis_{uuid.uuid4().hex[:8]}.mp4")
+    signature = f"{os.path.abspath(src_path)}:{source_stat.st_mtime_ns}:{source_stat.st_size}"
+    cache_key = hashlib.sha256(signature.encode()).hexdigest()[:20]
+    cached_path = os.path.join(UPLOAD_DIR, f"analysis_{cache_key}.mp4")
+    if os.path.isfile(cached_path) and os.path.getsize(cached_path) > 0:
+        return cached_path
+    out_path = os.path.join(UPLOAD_DIR, f"analysis_{uuid.uuid4().hex}.mp4")
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
         src_path,
         "-vf",
-        "scale=-2:640",
+        "scale=768:768:force_original_aspect_ratio=decrease:force_divisible_by=2,fps=15",
         "-c:v",
         "libx264",
         "-preset",
         "veryfast",
         "-crf",
         "31",
+        "-maxrate",
+        "1200k",
+        "-bufsize",
+        "2400k",
         "-c:a",
         "aac",
         "-b:a",
-        "64k",
+        "48k",
         "-ac",
         "1",
         "-movflags",
@@ -219,7 +230,13 @@ def analysis_proxy(src_path: str) -> str:
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=900)
         if result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-            return out_path
+            os.replace(out_path, cached_path)
+            return cached_path
     except (OSError, subprocess.SubprocessError):
         pass
+    if os.path.isfile(out_path):
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
     return src_path

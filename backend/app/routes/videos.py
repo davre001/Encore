@@ -8,6 +8,7 @@ import mimetypes
 import os
 import shutil
 import threading
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -23,6 +24,7 @@ router = APIRouter()
 
 _ACTIVE_ANALYSES: set[str] = set()
 _ACTIVE_ANALYSES_LOCK = threading.Lock()
+_UPLOAD_FINISH_LOCK = threading.Lock()
 STALE_DISPATCH_MS = 10_000
 STALE_ANALYSIS_MS = 90_000
 logger = logging.getLogger(__name__)
@@ -113,13 +115,34 @@ def _propose_moments(video_id: str, src_path: str, duration: float) -> None:
             {"start": row["start"], "end": row["end"], "text": row["text"]}
             for row in rows
         ]
+        disconnected_at = None
+        highest_progress = 48
+
         def report_progress(message: str, progress: int) -> None:
-            _status(video_id, "watching", message, progress=progress)
+            nonlocal highest_progress
+            highest_progress = max(highest_progress, progress)
+            if disconnected_at is not None:
+                elapsed = time.monotonic() - disconnected_at
+                if elapsed >= 120:
+                    message = "Connection error, check your network."
+                elif elapsed >= 60:
+                    message = "This is taking longer than usual."
+            _status(video_id, "watching", message, progress=highest_progress)
 
         report_progress("Preparing the video for review.", 48)
-        moments = analyze.find_moments(
-            video_id, duration, transcript, src_path, on_progress=report_progress,
-        )
+        while True:
+            moments = analyze.find_moments(
+                video_id, duration, transcript, src_path, on_progress=report_progress,
+            )
+            ai_error = gemini.last_error()
+            if moments or not ai_error or ai_error["errorType"] != "network":
+                break
+            if disconnected_at is None:
+                disconnected_at = time.monotonic()
+            if time.monotonic() - disconnected_at >= 1800:
+                break
+            report_progress("Reconnecting to the video AI.", highest_progress)
+            time.sleep(5)
         _status(video_id, "generating", "Turning the strongest beats into proposed cuts.")
         storage.save_moments(video_id, moments)
         if moments:
@@ -259,6 +282,19 @@ def finish_chunked_upload(
     filename: Optional[str] = None,
     user_id: Optional[str] = Depends(get_user_id),
 ) -> Video:
+    with _UPLOAD_FINISH_LOCK:
+        receipt = storage.get_upload_receipt(upload_id)
+        if receipt:
+            if receipt["userId"] != user_id:
+                raise HTTPException(status_code=404, detail="Upload session not found.")
+            return Video.model_validate(receipt["video"])
+        video = _finish_chunked_upload(upload_id, filename, user_id)
+        record = video.model_dump(by_alias=True) if isinstance(video, Video) else video
+        storage.save_upload_receipt(upload_id, user_id, record)
+        return video
+
+
+def _finish_chunked_upload(upload_id: str, filename: Optional[str], user_id: Optional[str]) -> Video:
     matches = glob.glob(os.path.join(storage.UPLOAD_DIR, f"{upload_id}.*.part"))
     if not matches:
         raise HTTPException(status_code=404, detail="Upload session not found.")

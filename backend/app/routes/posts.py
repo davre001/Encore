@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+import threading
 
 try:
     from googleapiclient.errors import HttpError
@@ -11,6 +12,7 @@ except ImportError:  # optional dependency guard
     HttpError = Exception
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from .. import storage
 from ..db import SessionLocal
@@ -21,6 +23,9 @@ from ..services import analytics, ffmpeg, playbook, youtube
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error.encore.posts")
+_JOB_LOCK = threading.RLock()
+_ACTIVE_JOBS: set[str] = set()
+_CLIP_LOCKS: dict[str, threading.Lock] = {}
 
 
 def _upload_path_for_clip(clip: dict) -> str | None:
@@ -146,20 +151,42 @@ async def publish_clip(
     clip_id: str,
     user_id: str = Depends(get_user_id),
 ) -> PublishResult:
+    return await run_in_threadpool(_publish_locked, clip_id, user_id)
+
+
+def _publish_locked(clip_id: str, user_id: str, on_progress=None) -> PublishResult:
+    clip = storage.get_clip(clip_id)
+    if not clip or (clip.get("userId") and clip["userId"] != user_id):
+        raise HTTPException(status_code=404, detail="clip not found")
+    with _JOB_LOCK:
+        lock = _CLIP_LOCKS.setdefault(clip_id, threading.Lock())
+    with lock:
+        return _publish_once(clip_id, user_id, on_progress)
+
+
+def _publish_once(clip_id: str, user_id: str, on_progress=None) -> PublishResult:
     clip = storage.get_clip(clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="clip not found")
     if clip.get("userId") and clip["userId"] != user_id:
         raise HTTPException(status_code=404, detail="clip not found")
+    if clip.get("posted") and clip.get("postId") and clip.get("postUrl"):
+        return PublishResult(post_id=clip["postId"], post_url=clip["postUrl"])
     if not youtube.connected(user_id):
         raise HTTPException(
             status_code=409,
             detail="Connect a YouTube channel in Settings before posting.",
         )
 
+    if on_progress:
+        on_progress("rendering", "Preparing the cut for YouTube.", 20)
     upload_path = _upload_path_for_clip(clip)
     try:
-        result = youtube.publish(clip, upload_path, user_id=user_id)
+        if on_progress:
+            on_progress("uploading", "Uploading the cut to YouTube.", 35)
+            result = youtube.publish(clip, upload_path, user_id=user_id, on_progress=on_progress)
+        else:
+            result = youtube.publish(clip, upload_path, user_id=user_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -197,6 +224,88 @@ async def publish_clip(
         post_url=result["postUrl"],
     )
     return PublishResult(post_id=result["postId"], post_url=result["postUrl"])
+
+
+def _publish_worker(clip_id: str, user_id: str) -> None:
+    def progress(stage: str, message: str, percent: int) -> None:
+        with _JOB_LOCK:
+            current = storage.get_publish_job(clip_id)
+            if current and current.get("cancelRequested"):
+                raise HTTPException(status_code=409, detail="Stopped by user.")
+            storage.save_publish_job(clip_id, {
+                "userId": user_id, "stage": stage, "message": message,
+                "progress": percent, "done": False,
+            })
+    try:
+        result = _publish_locked(clip_id, user_id, progress)
+        with _JOB_LOCK:
+            current = storage.get_publish_job(clip_id) or {}
+            storage.save_publish_job(clip_id, {
+                "userId": user_id, "stage": "complete", "message": "Published to YouTube.",
+                "progress": 100, "done": True, **result.model_dump(by_alias=True),
+                "cancelRequested": bool(current.get("cancelRequested")),
+            })
+    except HTTPException as exc:
+        storage.save_publish_job(clip_id, {
+            "userId": user_id, "stage": "error", "message": str(exc.detail),
+            "status": exc.status_code, "done": True, "cancelRequested": str(exc.detail) == "Stopped by user.",
+        })
+    except Exception:
+        logger.exception("YouTube publish job failed for clip %s", clip_id)
+        storage.save_publish_job(clip_id, {
+            "userId": user_id, "stage": "error", "message": "YouTube publishing failed.",
+            "status": 500, "done": True,
+        })
+    finally:
+        with _JOB_LOCK:
+            _ACTIVE_JOBS.discard(clip_id)
+
+
+@router.post("/{clip_id}/job", status_code=202)
+def start_publish_job(clip_id: str, user_id: str = Depends(get_user_id)) -> dict:
+    clip = storage.get_clip(clip_id)
+    if not clip or (clip.get("userId") and clip["userId"] != user_id):
+        raise HTTPException(status_code=404, detail="clip not found")
+    with _JOB_LOCK:
+        job = storage.get_publish_job(clip_id)
+        if clip_id in _ACTIVE_JOBS or (job and job.get("stage") == "complete"):
+            return job or {"stage": "queued", "done": False}
+        if job and not job.get("done") and job.get("stage") in {"uploading", "reconnecting"}:
+            raise HTTPException(status_code=409, detail="Publishing was interrupted by a server restart. Check your YouTube channel before retrying.")
+        job = storage.save_publish_job(clip_id, {
+            "userId": user_id, "stage": "queued", "message": "Preparing to publish.",
+            "progress": 5, "done": False,
+        })
+        _ACTIVE_JOBS.add(clip_id)
+        try:
+            threading.Thread(target=_publish_worker, args=(clip_id, user_id), daemon=True).start()
+        except RuntimeError as exc:
+            _ACTIVE_JOBS.discard(clip_id)
+            storage.save_publish_job(clip_id, {**job, "stage": "error", "done": True, "message": "Publishing could not start."})
+            raise HTTPException(status_code=503, detail="Publishing could not start.") from exc
+        return job
+
+
+@router.get("/{clip_id}/job")
+def get_publish_job(clip_id: str, user_id: str = Depends(get_user_id)) -> dict:
+    job = storage.get_publish_job(clip_id)
+    if not job or job.get("userId") != user_id:
+        raise HTTPException(status_code=404, detail="Publish job not found.")
+    if not job.get("done") and clip_id not in _ACTIVE_JOBS:
+        return {**job, "stage": "error", "done": True, "status": 409,
+                "message": "Publishing was interrupted by a server restart. Check your YouTube channel before retrying."}
+    return job
+
+
+@router.post("/{clip_id}/job/cancel")
+def cancel_publish_job(clip_id: str, user_id: str = Depends(get_user_id)) -> dict:
+    with _JOB_LOCK:
+        job = storage.get_publish_job(clip_id)
+        if not job or job.get("userId") != user_id:
+            raise HTTPException(status_code=404, detail="Publish job not found.")
+        if job.get("done"):
+            return job
+        return storage.save_publish_job(clip_id, {**job, "cancelRequested": True, "message": "Stopping publishing."})
 
 
 @router.get("/{post_id}/check", response_model=PostCheck)

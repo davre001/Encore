@@ -68,6 +68,7 @@ async function scenario({
   threads = {},
   steps = null,
   publishError = null,
+  disconnectTest = false,
 }) {
   console.log(`\n${title}`);
 
@@ -85,6 +86,8 @@ async function scenario({
     patches: [],
     llm: [],
     requests: [],
+    publishComplete: !disconnectTest,
+    offline: false,
   };
 
   const browser = await chromium.launch({ channel: "msedge", headless: true });
@@ -143,6 +146,13 @@ async function scenario({
     const path = url.pathname;
     const method = request.method();
     state.requests.push(`${method} ${path}`);
+    if (method === "OPTIONS") {
+      return route.fulfill({ status: 204, headers: {
+        "Access-Control-Allow-Origin": request.headers().origin || BASE,
+        "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
+        "Access-Control-Allow-Headers": "authorization,content-type",
+      } });
+    }
 
     // --- the half-finished job the editor is handed -------------------------
     if (path === `/api/moments/${videoId}`) return json(route, state.moments);
@@ -170,6 +180,12 @@ async function scenario({
     }
 
     // --- publishing --------------------------------------------------------
+    if (path.endsWith("/job") && path.startsWith("/api/posts/") && method === "GET") {
+      if (state.offline) return route.abort("internetdisconnected");
+      return json(route, state.publishComplete
+        ? { stage: "complete", done: true, message: "Published.", postId: "post_x", postUrl: "https://youtube.com/shorts/x" }
+        : { stage: "uploading", done: false, message: "Uploading the cut to YouTube.", progress: 55 });
+    }
     if (path.endsWith("/check") && path.startsWith("/api/posts/")) {
       return json(route, {
         postId: "post_x",
@@ -183,10 +199,11 @@ async function scenario({
     if (path.startsWith("/api/posts/") && method === "POST") {
       const id = decodeURIComponent(path.split("/")[3]);
       state.posts.push(id);
-      if (publishError) return json(route, { detail: publishError }, 409);
+      if (publishError) return json(route, { stage: "error", done: true, message: publishError, status: 409 }, 202);
+      if (disconnectTest) return json(route, { stage: "uploading", done: false, message: "Uploading the cut to YouTube.", progress: 35 }, 202);
       const found = state.clips.find((c) => c.id === id);
       if (found) Object.assign(found, { posted: true, postId: "post_x", postUrl: "https://youtube.com/shorts/x" });
-      return json(route, { postId: "post_x", postUrl: "https://youtube.com/shorts/x" });
+      return json(route, { stage: "complete", done: true, message: "Published.", postId: "post_x", postUrl: "https://youtube.com/shorts/x" }, 202);
     }
 
     // --- the LLM: resume must never reach this -----------------------------
@@ -515,7 +532,7 @@ for (const [detail, expected] of [
     text: null,
     steps: async ({ page, state, settle }) => {
       await settle();
-      check("publish request was attempted", state.posts.length > 0);
+      check("publish request was attempted", state.posts.length > 0, state.posts.length ? "" : JSON.stringify(state.requests));
       check("failed publishing clears its loader", await page.locator(".cut__chat-progress").count() === 0);
       await page.click('button[title="Cuts ready to ship"]');
       check("error is visible in Cuts", await page.locator(".cut__status-text").filter({ hasText: expected }).isVisible());
@@ -526,6 +543,35 @@ for (const [detail, expected] of [
 }
 
 // ---------------------------------------------------------------------------
+
+if (process.env.NETWORK_TEST) {
+  const recovered = await scenario({
+    title: "publishing reconnects after browser goes offline",
+    mode: "auto", text: null,
+    moments: [moment(1, "accepted")], clips: [clip("mom_1", "clip_mom_1")],
+    disconnectTest: true,
+    steps: async ({ page, state }) => {
+      await page.clock.install();
+      await page.waitForFunction(() => document.querySelector(".cut__chat-progress-top span")?.textContent?.includes("Uploading"));
+      state.offline = true;
+      await page.context().setOffline(true);
+      await page.waitForTimeout(2000);
+      check("no immediate connection error", !(await page.locator(".cut__panel-body").innerText()).includes("Connection error"));
+      await page.clock.fastForward(61_000);
+      check("one-minute delay notice is visible", await page.getByText("This is taking longer than usual.", { exact: true }).isVisible());
+      await page.clock.fastForward(61_000);
+      check("two-minute connection notice is visible", await page.getByText("Connection error, check your network.", { exact: true }).isVisible());
+      state.publishComplete = true;
+      state.offline = false;
+      await page.context().setOffline(false);
+      await page.clock.resume();
+      await page.waitForFunction(() => !document.querySelector(".cut__chat-progress"));
+      check("reconnection did not submit another upload", state.posts.length === 1);
+      check("reconnection clears the error", !(await page.locator(".cut__panel-body").innerText()).includes("Connection error"));
+    },
+  });
+  check("recovered publish displays the actual YouTube link", /Watch it here:/.test(recovered.chat));
+}
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
